@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Moiré Patterns</title>
+<style>
+* { margin: 0; padding: 0; }
+body { background: #fff; overflow: hidden; cursor: crosshair; }
+canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let mouseX, mouseY;
+let spacing = 12;
+let pattern = 0; // 0=circles, 1=lines, 2=radial
+const patterns = ['circles', 'lines', 'radial'];
+let thirdLayer = false;
+let colorMode = false;
+let autoMode = true; // auto-orbit when mouse hasn't moved
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = window.innerWidth * dpr;
+  canvas.height = window.innerHeight * dpr;
+  canvas.style.width = window.innerWidth + 'px';
+  canvas.style.height = window.innerHeight + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  mouseX = window.innerWidth / 2;
+  mouseY = window.innerHeight / 2;
+}
+
+resize();
+window.addEventListener('resize', resize);
+
+let mouseTimer = null;
+canvas.addEventListener('mousemove', (e) => {
+  mouseX = e.clientX;
+  mouseY = e.clientY;
+  autoMode = false;
+  clearTimeout(mouseTimer);
+  mouseTimer = setTimeout(() => { autoMode = true; }, 3000);
+});
+
+canvas.addEventListener('click', () => {
+  pattern = (pattern + 1) % patterns.length;
+});
+
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  spacing = Math.max(4, Math.min(30, spacing - e.deltaY * 0.02));
+}, { passive: false });
+
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space') { e.preventDefault(); thirdLayer = !thirdLayer; }
+  if (e.key === 'c' || e.key === 'C') { colorMode = !colorMode; }
+});
+
+function drawCirclePattern(cx, cy, maxR, style) {
+  ctx.strokeStyle = style;
+  ctx.lineWidth = 0.7;
+  const numRings = Math.ceil(maxR / spacing);
+  ctx.beginPath();
+  for (let i = 1; i <= numRings; i++) {
+    const r = i * spacing;
+    ctx.moveTo(cx + r, cy);
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  }
+  ctx.stroke();
+}
+
+function drawLinePattern(cx, cy, maxR, angle, style) {
+  ctx.strokeStyle = style;
+  ctx.lineWidth = 0.7;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const numLines = Math.ceil(maxR * 2 / spacing);
+  ctx.beginPath();
+  for (let i = -numLines; i <= numLines; i++) {
+    const offset = i * spacing;
+    const ox = cx + offset * cos;
+    const oy = cy + offset * sin;
+    ctx.moveTo(ox - sin * maxR, oy + cos * maxR);
+    ctx.lineTo(ox + sin * maxR, oy - cos * maxR);
+  }
+  ctx.stroke();
+}
+
+function drawRadialPattern(cx, cy, maxR, style) {
+  ctx.strokeStyle = style;
+  ctx.lineWidth = 0.7;
+  const numRays = Math.floor(360 / (spacing * 0.5));
+  ctx.beginPath();
+  for (let i = 0; i < numRays; i++) {
+    const angle = (i / numRays) * Math.PI * 2;
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.cos(angle) * maxR, cy + Math.sin(angle) * maxR);
+  }
+  ctx.stroke();
+}
+
+function drawPattern(cx, cy, maxR, type, style) {
+  if (type === 'circles') drawCirclePattern(cx, cy, maxR, style);
+  else if (type === 'lines') drawLinePattern(cx, cy, maxR, 0, style);
+  else if (type === 'radial') drawRadialPattern(cx, cy, maxR, style);
+}
+
+function draw(t) {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  const time = t * 0.001;
+
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, w, h);
+
+  const centerX = w / 2;
+  const centerY = h / 2;
+  const maxR = Math.sqrt(w * w + h * h);
+
+  // Auto orbit when idle
+  let mx = mouseX;
+  let my = mouseY;
+  if (autoMode) {
+    const orbitR = Math.min(w, h) * 0.08;
+    mx = centerX + Math.cos(time * 0.3) * orbitR;
+    my = centerY + Math.sin(time * 0.23) * orbitR;
+  }
+
+  const patName = patterns[pattern];
+
+  if (colorMode) {
+    ctx.globalCompositeOperation = 'multiply';
+    drawPattern(centerX, centerY, maxR, patName, 'rgba(255,0,0,0.5)');
+    drawPattern(mx, my, maxR, patName, 'rgba(0,0,255,0.5)');
+    if (thirdLayer) {
+      const tx = centerX + (centerX - mx) * 0.5;
+      const ty = centerY + (centerY - my) * 0.5;
+      drawPattern(tx, ty, maxR, patName, 'rgba(0,180,0,0.5)');
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  } else {
+    drawPattern(centerX, centerY, maxR, patName, 'rgba(0,0,0,0.5)');
+    drawPattern(mx, my, maxR, patName, 'rgba(0,0,0,0.5)');
+    if (thirdLayer) {
+      const tx = centerX + (centerX - mx) * 0.5;
+      const ty = centerY + (centerY - my) * 0.5;
+      drawPattern(tx, ty, maxR, patName, 'rgba(0,0,0,0.35)');
+    }
+  }
+
+  // HUD
+  ctx.fillStyle = 'rgba(0,0,0,0.15)';
+  ctx.font = '11px monospace';
+  ctx.fillText(`click: pattern (${patName})  scroll: spacing (${spacing.toFixed(1)})  space: 3rd layer (${thirdLayer ? 'on' : 'off'})  c: color (${colorMode ? 'on' : 'off'})`, 12, h - 12);
+
+  requestAnimationFrame(draw);
+}
+
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>

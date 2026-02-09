@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>experiments</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fragment+Mono&family=Inter+Tight:wght@400;500;600;700&family=Urbanist:wght@600;700;800&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #050505;
+    --glass-bg: rgba(255,255,255,0.06);
+    --glass-bg-hover: rgba(255,255,255,0.10);
+    --glass-border: rgba(255,255,255,0.08);
+    --glass-border-hover: rgba(255,255,255,0.18);
+    --glass-blur: blur(40px) saturate(120%);
+    --smooth-ease: cubic-bezier(0.4, 0, 0.2, 1);
+    --bounce-ease: cubic-bezier(0.34, 1.56, 0.64, 1);
+    --text-primary: #fff;
+    --text-muted: rgba(255,255,255,0.5);
+    --text-dim: rgba(255,255,255,0.25);
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: 'Inter Tight', system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── Ambient ────────────────────────────────────────────────── */
+  .ambient { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+  .blob { position: absolute; border-radius: 50%; filter: blur(120px); opacity: 0.04; animation: drift 20s ease-in-out infinite alternate; }
+  .blob-1 { width: 600px; height: 600px; background: #8b5cf6; top: -10%; left: -5%; animation-duration: 22s; }
+  .blob-2 { width: 500px; height: 500px; background: #14b8a6; top: 40%; right: -10%; animation-duration: 18s; animation-delay: -8s; }
+  .blob-3 { width: 450px; height: 450px; background: #f59e0b; bottom: -5%; left: 30%; animation-duration: 25s; animation-delay: -14s; }
+  @keyframes drift {
+    0% { transform: translate(0,0) scale(1); }
+    33% { transform: translate(40px,-30px) scale(1.05); }
+    66% { transform: translate(-20px,40px) scale(0.95); }
+    100% { transform: translate(30px,20px) scale(1.02); }
+  }
+  body::after {
+    content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-image: radial-gradient(rgba(255,255,255,0.03) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+
+  /* ── Layout ─────────────────────────────────────────────────── */
+  .gallery { position: relative; z-index: 1; max-width: 1200px; margin: 0 auto; padding: 80px 24px 120px; }
+
+  header { text-align: center; margin-bottom: 48px; }
+  header h1 { font-family: 'Urbanist', sans-serif; font-size: 48px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 10px; }
+  header p { font-size: 15px; color: var(--text-muted); margin-bottom: 12px; }
+  .experiment-count {
+    display: inline-block; font-family: 'Fragment Mono', monospace; font-size: 11px; color: var(--text-dim);
+    background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: 100px; padding: 4px 12px;
+    backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+  }
+
+  /* ── Filters ────────────────────────────────────────────────── */
+  .filters { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; margin-bottom: 40px; }
+  .filter-pill {
+    font-family: 'Inter Tight', sans-serif; font-size: 13px; font-weight: 500; color: var(--text-muted);
+    background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: 100px; padding: 8px 18px;
+    cursor: pointer; backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+    transition: all 0.25s var(--smooth-ease); user-select: none;
+  }
+  .filter-pill:hover { background: var(--glass-bg-hover); border-color: var(--glass-border-hover); color: var(--text-primary); }
+  .filter-pill.active { background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.25); color: var(--text-primary); }
+
+  /* ── Bento Grid ─────────────────────────────────────────────── */
+  .bento { display: grid; grid-template-columns: repeat(4, 1fr); grid-auto-rows: 200px; gap: 16px; }
+  .size-large { grid-column: span 2; grid-row: span 2; }
+  .size-wide  { grid-column: span 2; }
+  .size-tall  { grid-row: span 2; }
+
+  @media (max-width: 900px) { .bento { grid-template-columns: repeat(3, 1fr); } }
+  @media (max-width: 600px) {
+    .bento { grid-template-columns: repeat(2, 1fr); grid-auto-rows: 180px; gap: 12px; }
+    .size-wide { grid-column: span 2; }
+    .size-tall { grid-row: span 2; }
+  }
+  @media (max-width: 400px) {
+    .bento { grid-template-columns: 1fr; grid-auto-rows: 200px; }
+    .size-large, .size-wide, .size-tall { grid-column: span 1; grid-row: span 1; }
+    .gallery { padding: 48px 16px 80px; }
+    header h1 { font-size: 36px; }
+  }
+
+  /* ── Card ────────────────────────────────────────────────────── */
+  .card {
+    display: flex; flex-direction: column; text-decoration: none; color: inherit;
+    background: var(--glass-bg); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--glass-border); border-radius: 16px;
+    position: relative; overflow: hidden; cursor: pointer;
+    opacity: 0; transform: translateY(24px) scale(0.92); filter: blur(4px);
+    transition: transform 0.35s var(--bounce-ease), box-shadow 0.3s var(--smooth-ease), border-color 0.3s var(--smooth-ease);
+  }
+  .card.revealed { animation: cardReveal 0.6s var(--smooth-ease) calc(var(--stagger, 0) * 0.03s) forwards; }
+  @keyframes cardReveal {
+    from { opacity: 0; transform: translateY(24px) scale(0.92); filter: blur(4px); }
+    to { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+  }
+  .card.filtering-out { opacity: 0 !important; transform: scale(0.9) !important; filter: blur(4px) !important; pointer-events: none; transition: all 0.25s var(--smooth-ease) !important; }
+  .card.hidden { display: none; }
+  .card:hover { transform: translateY(-4px) scale(1.02); border-color: var(--glass-border-hover); box-shadow: 0 12px 40px var(--glow, rgba(255,255,255,0.04)); }
+  .card:active { transform: scale(0.98); transition: transform 0.15s ease; }
+
+  /* ── Card Visual ────────────────────────────────────────────── */
+  .card-visual { flex: 1; position: relative; overflow: hidden; border-radius: 12px 12px 0 0; }
+
+  .card-thumb {
+    position: absolute; inset: 0;
+    background-size: cover; background-position: center;
+    z-index: 0;
+    transition: transform 0.6s var(--smooth-ease), filter 0.3s var(--smooth-ease);
+  }
+
+  .card:hover .card-thumb { transform: scale(1.05); filter: brightness(1.15); }
+
+  /* Animated gradient overlay – adds color tint + motion */
+  .card-visual-bg {
+    position: absolute; inset: -20%; width: 140%; height: 140%;
+    z-index: 1; opacity: 0.35; mix-blend-mode: screen;
+    animation: visualPulse var(--anim-dur, 12s) ease-in-out infinite, visualSpin var(--spin-dur, 30s) linear infinite;
+    animation-delay: var(--anim-delay, 0s);
+    will-change: transform;
+  }
+
+  .card:hover .card-visual-bg { opacity: 0.15; }
+
+  @keyframes visualPulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+  }
+  @keyframes visualSpin {
+    from { rotate: 0deg; }
+    to { rotate: 360deg; }
+  }
+
+  /* ── Description Overlay ────────────────────────────────────── */
+  .card-desc {
+    position: absolute; bottom: 0; left: 0; right: 0; padding: 40px 14px 14px; z-index: 2;
+    background: linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.4) 60%, transparent 100%);
+    font-size: 12px; line-height: 1.5; color: rgba(255,255,255,0.8);
+    opacity: 0; transform: translateY(6px); pointer-events: none;
+    transition: opacity 0.3s var(--smooth-ease), transform 0.3s var(--smooth-ease);
+  }
+  .card:hover .card-desc { opacity: 1; transform: translateY(0); }
+
+  /* ── Card Info Strip ────────────────────────────────────────── */
+  .card-info {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 10px 14px; min-height: 44px; background: rgba(0,0,0,0.3);
+    border-top: 1px solid rgba(255,255,255,0.04); z-index: 2;
+  }
+  .card-title { font-family: 'Inter Tight', sans-serif; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card-tag {
+    font-family: 'Fragment Mono', monospace; font-size: 10px; color: var(--text-dim);
+    background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 100px; padding: 2px 8px; white-space: nowrap; flex-shrink: 0;
+  }
+
+  /* ── Ripple ─────────────────────────────────────────────────── */
+  .ripple {
+    position: absolute; border-radius: 50%; background: rgba(255,255,255,0.15);
+    transform: scale(0); animation: rippleEffect 0.6s var(--smooth-ease) forwards;
+    pointer-events: none; z-index: 10;
+  }
+  @keyframes rippleEffect { to { transform: scale(4); opacity: 0; } }
+
+  /* ── Footer ─────────────────────────────────────────────────── */
+  footer { text-align: center; margin-top: 60px; padding-top: 24px; border-top: 1px solid rgba(255,255,255,0.04); }
+  footer p { font-family: 'Fragment Mono', monospace; font-size: 11px; color: var(--text-dim); }
+  footer a { color: var(--text-muted); text-decoration: none; transition: color 0.25s var(--smooth-ease); }
+  footer a:hover { color: var(--text-primary); }
+</style>
+</head>
+<body>
+
+<div class="ambient">
+  <div class="blob blob-1"></div>
+  <div class="blob blob-2"></div>
+  <div class="blob blob-3"></div>
+</div>
+
+<div class="gallery">
+  <header>
+    <h1>experiments</h1>
+    <p>mathematical art, shaders, and generative systems</p>
+    <span class="experiment-count" id="count"></span>
+  </header>
+
+  <div class="filters" id="filters"></div>
+  <div class="bento" id="bento"></div>
+
+  <footer>
+    <p>built with canvas, webgl, and math &mdash; <a href="https://x.com/rizzytoday">@rizzytoday</a></p>
+  </footer>
+</div>
+
+<script>
+const experiments = [
+  {
+    file: 'spirograph', title: 'Spirograph',
+    desc: 'Hypotrochoid and epitrochoid parametric curves',
+    accent: '#ff6b9d', tag: 'parametric curves', category: 'curves', size: 'wide',
+    animDur: '10s', spinDur: '25s',
+    gradient: `conic-gradient(from 0deg at 50% 50%, #ff6b9d55 0deg, transparent 60deg, #ff6b9d40 120deg, transparent 180deg, #ff6b9d35 240deg, transparent 300deg, #ff6b9d55 360deg), conic-gradient(from 45deg at 40% 60%, #ff6b9d40 0deg, transparent 90deg, #ff6b9d30 180deg, transparent 270deg), radial-gradient(circle at 50% 50%, #ff6b9d35 0%, transparent 60%)`
+  },
+  {
+    file: 'lissajous', title: 'Lissajous Table',
+    desc: 'Harmonic curves from frequency ratios on an animated grid',
+    accent: '#888888', tag: 'harmonics', category: 'curves', size: 'normal',
+    animDur: '14s', spinDur: '40s',
+    gradient: `repeating-linear-gradient(45deg, rgba(255,255,255,0.12) 0px, transparent 2px, transparent 12px, rgba(255,255,255,0.12) 14px), repeating-linear-gradient(-45deg, rgba(255,255,255,0.10) 0px, transparent 2px, transparent 16px, rgba(255,255,255,0.10) 18px), linear-gradient(135deg, #44444480 0%, #66666650 100%)`
+  },
+  {
+    file: 'phyllotaxis', title: 'Phyllotaxis Engine',
+    desc: 'Golden angle spirals reveal Fibonacci arms in real time',
+    accent: '#FCE184', tag: 'golden ratio', category: 'curves', size: 'tall',
+    animDur: '11s', spinDur: '20s',
+    gradient: `conic-gradient(from 137.5deg at 50% 50%, #FCE18450 0deg, transparent 30deg, #FCE18440 60deg, transparent 90deg, #FCE18450 120deg, transparent 150deg, #FCE18440 180deg, transparent 210deg, #FCE18450 240deg, transparent 270deg, #FCE18440 300deg, transparent 330deg), radial-gradient(circle at 50% 50%, #FCE18470 0%, #FCE18440 30%, transparent 65%), radial-gradient(circle at 50% 50%, transparent 20%, #FCE18428 40%, transparent 55%, #FCE18420 70%, transparent 85%)`
+  },
+  {
+    file: 'hilbert', title: 'Hilbert Curve',
+    desc: 'Recursive space-filling curve with rainbow trace',
+    accent: '#54d4a0', tag: 'space-filling', category: 'curves', size: 'normal',
+    animDur: '16s', spinDur: '60s',
+    gradient: `repeating-linear-gradient(0deg, #54d4a038 0px, transparent 2px, transparent 18px, #54d4a038 20px), repeating-linear-gradient(90deg, #54d4a038 0px, transparent 2px, transparent 18px, #54d4a038 20px), linear-gradient(135deg, #1e4e38 0%, #102a1e 100%)`
+  },
+  {
+    file: 'moire', title: 'Moiré Patterns',
+    desc: 'Interference from overlapping periodic structures',
+    accent: '#aaaaaa', tag: 'interference', category: 'curves', size: 'normal',
+    animDur: '8s', spinDur: '15s',
+    gradient: `repeating-radial-gradient(circle at 50% 50%, transparent 0px, transparent 8px, rgba(255,255,255,0.18) 9px, transparent 10px), repeating-radial-gradient(circle at 52% 48%, transparent 0px, transparent 9px, rgba(255,255,255,0.15) 10px, transparent 11px), radial-gradient(circle at 50% 50%, #444444cc 0%, #222222cc 100%)`
+  },
+  {
+    file: 'attractor', title: 'Strange Attractor',
+    desc: 'Chaotic fractal shapes from density accumulation',
+    accent: '#b480ff', tag: 'chaos theory', category: 'chaos', size: 'large',
+    animDur: '13s', spinDur: '35s',
+    gradient: `radial-gradient(ellipse at 35% 40%, #b480ff55 0%, transparent 50%), radial-gradient(ellipse at 65% 55%, #9060dd48 0%, transparent 45%), radial-gradient(ellipse at 50% 70%, #7040bb40 0%, transparent 55%), radial-gradient(ellipse at 45% 30%, #c090ff38 0%, transparent 40%), linear-gradient(160deg, #2e1250 0%, #180a30 50%, #0a0515 100%)`
+  },
+  {
+    file: 'dla', title: 'DLA Crystal',
+    desc: 'Diffusion-limited aggregation grows fractal crystals',
+    accent: '#e8a54c', tag: 'random walk', category: 'chaos', size: 'normal',
+    animDur: '15s', spinDur: '22s',
+    gradient: `repeating-conic-gradient(from 0deg at 50% 50%, #e8a54c40 0deg, transparent 15deg, #e8a54c30 30deg, transparent 45deg), radial-gradient(circle at 50% 50%, #e8a54c60 0%, #e8a54c30 25%, transparent 50%), radial-gradient(circle at 50% 50%, #302010 0%, #1a1008 100%)`
+  },
+  {
+    file: 'lsystem', title: 'L-System Garden',
+    desc: 'String rewriting and turtle graphics grow plants',
+    accent: '#5dba47', tag: 'rewriting grammar', category: 'chaos', size: 'tall',
+    animDur: '12s', spinDur: '50s',
+    gradient: `repeating-linear-gradient(90deg, #5dba4724 0px, transparent 1px, transparent 10px, #5dba4724 11px), repeating-linear-gradient(90deg, #5dba4718 0px, transparent 1px, transparent 24px, #5dba4718 25px), linear-gradient(180deg, #102a0c 0%, #1d401890 40%, #5dba4750 100%)`
+  },
+  {
+    file: 'orbiters', title: 'Orbiters',
+    desc: 'Phase-offset dots create emergent wave patterns',
+    accent: '#888888', tag: 'phase interference', category: 'fields', size: 'normal',
+    animDur: '9s', spinDur: '18s',
+    gradient: `radial-gradient(circle at 50% 50%, transparent 15%, rgba(255,255,255,0.14) 16%, transparent 17%), radial-gradient(circle at 50% 50%, transparent 30%, rgba(255,255,255,0.11) 31%, transparent 32%), radial-gradient(circle at 50% 50%, transparent 45%, rgba(255,255,255,0.09) 46%, transparent 47%), radial-gradient(circle at 50% 50%, transparent 60%, rgba(255,255,255,0.07) 61%, transparent 62%), radial-gradient(circle at 50% 50%, #303030aa 0%, #1a1a1acc 100%)`
+  },
+  {
+    file: 'oscillators', title: 'Coupled Oscillators',
+    desc: 'Kuramoto synchronization on a needle grid',
+    accent: '#64c8ff', tag: 'synchronization', category: 'fields', size: 'normal',
+    animDur: '11s', spinDur: '45s',
+    gradient: `repeating-linear-gradient(90deg, #64c8ff28 0px, transparent 1px, transparent 5px, #64c8ff28 6px), repeating-linear-gradient(0deg, #64c8ff18 0px, transparent 1px, transparent 20px), linear-gradient(180deg, #163040 0%, #0e2030 100%)`
+  },
+  {
+    file: 'sun', title: 'Gravity Well',
+    desc: 'Particles spiral into a growing star',
+    accent: '#ff8844', tag: 'n-body gravity', category: 'fields', size: 'normal',
+    animDur: '8s', spinDur: '28s',
+    gradient: `radial-gradient(circle at 50% 50%, #ffffff50 0%, #ffcc6648 8%, #ff884440 20%, #ff440030 35%, transparent 55%), radial-gradient(circle at 50% 50%, #ff884438 0%, transparent 70%), radial-gradient(circle at 50% 50%, #301c0c 0%, #1a100a 100%)`
+  },
+  {
+    file: 'flowfield', title: 'Flow Field',
+    desc: 'Perlin noise vector field guides thousands of particles',
+    accent: '#8866dd', tag: 'noise field', category: 'fields', size: 'wide',
+    animDur: '14s', spinDur: '32s',
+    gradient: `linear-gradient(30deg, #8866dd40 0%, transparent 40%), linear-gradient(150deg, #6644bb40 0%, transparent 40%), linear-gradient(270deg, #aa88ee30 0%, transparent 40%), repeating-linear-gradient(30deg, #8866dd24 0px, transparent 2px, transparent 8px), linear-gradient(135deg, #221840 0%, #140e28 100%)`
+  },
+  {
+    file: 'waves', title: 'Wave Interference',
+    desc: 'Multi-source wave superposition with damping',
+    accent: '#4dc9f6', tag: 'superposition', category: 'fields', size: 'wide',
+    animDur: '10s', spinDur: '20s',
+    gradient: `radial-gradient(circle at 30% 40%, transparent 15%, #4dc9f630 16%, transparent 17%, transparent 25%, #4dc9f625 26%, transparent 27%, transparent 35%, #4dc9f618 36%, transparent 37%), radial-gradient(circle at 70% 60%, transparent 10%, #4dc9f630 11%, transparent 12%, transparent 22%, #4dc9f625 23%, transparent 24%, transparent 34%, #4dc9f618 35%, transparent 36%), radial-gradient(circle at 50% 50%, #1a3040 0%, #102028 100%)`
+  },
+  {
+    file: 'shader-sdf', title: 'Signed Distance Functions',
+    desc: 'Raymarched shapes with soft shadows and ambient occlusion',
+    accent: '#6688cc', tag: 'raymarching', category: 'shaders', size: 'normal',
+    animDur: '12s', spinDur: '40s',
+    gradient: `radial-gradient(circle at 45% 42%, #8899bb60 0%, #6688cc40 25%, transparent 50%), linear-gradient(180deg, transparent 50%, #6688cc28 80%, #334466 100%), radial-gradient(circle at 50% 50%, #1e2e44 0%, #121c28 100%)`
+  },
+  {
+    file: 'julia', title: 'Julia Set Explorer',
+    desc: 'z → z² + c fractal with smooth coloring palettes',
+    accent: '#dd66aa', tag: 'fractal iteration', category: 'shaders', size: 'large',
+    animDur: '15s', spinDur: '24s',
+    gradient: `conic-gradient(from 0deg at 50% 50%, #dd66aa50 0deg, #6688cc48 60deg, #66ddaa40 120deg, #ddaa6648 180deg, #8866dd50 240deg, #dd666648 300deg, #dd66aa50 360deg), radial-gradient(circle at 50% 50%, #dd66aa48 0%, transparent 40%), radial-gradient(circle at 50% 50%, #180c22 0%, #0c0a14 100%)`
+  },
+  {
+    file: 'newton', title: 'Newton Fractal',
+    desc: 'Root-finding on complex polynomials creates basins',
+    accent: '#cc6688', tag: 'complex analysis', category: 'shaders', size: 'normal',
+    animDur: '13s', spinDur: '26s',
+    gradient: `radial-gradient(circle at 35% 35%, #cc668870 0%, transparent 35%), radial-gradient(circle at 65% 65%, #66cc8860 0%, transparent 35%), radial-gradient(circle at 55% 30%, #6688cc55 0%, transparent 35%), radial-gradient(circle at 50% 50%, #201420 0%, #121014 100%)`
+  },
+];
+
+const categories = [
+  { key: 'all', label: 'All' },
+  { key: 'curves', label: 'Curves & Geometry' },
+  { key: 'chaos', label: 'Chaos & Growth' },
+  { key: 'fields', label: 'Fields & Forces' },
+  { key: 'shaders', label: 'Shaders' },
+];
+
+document.getElementById('count').textContent = `${experiments.length} experiments`;
+
+// ── Filters ───────────────────────────────────────────────────
+const filtersEl = document.getElementById('filters');
+
+categories.forEach(cat => {
+  const pill = document.createElement('button');
+  pill.className = 'filter-pill' + (cat.key === 'all' ? ' active' : '');
+  pill.textContent = cat.label;
+  pill.dataset.category = cat.key;
+  pill.addEventListener('click', () => {
+    document.querySelectorAll('.filter-pill').forEach(p => p.classList.toggle('active', p.dataset.category === cat.key));
+    let idx = 0;
+    document.querySelectorAll('.card').forEach(card => {
+      const match = cat.key === 'all' || card.dataset.category === cat.key;
+      if (!match) {
+        card.classList.add('filtering-out');
+        setTimeout(() => { card.classList.add('hidden'); card.classList.remove('filtering-out'); }, 250);
+      } else {
+        card.classList.remove('hidden', 'filtering-out');
+        card.style.setProperty('--stagger', idx++);
+        card.classList.remove('revealed');
+        void card.offsetWidth;
+        card.classList.add('revealed');
+      }
+    });
+  });
+  filtersEl.appendChild(pill);
+});
+
+// ── Render Cards ──────────────────────────────────────────────
+const bentoEl = document.getElementById('bento');
+
+experiments.forEach((exp, i) => {
+  const a = document.createElement('a');
+  a.href = `${exp.file}.html`;
+  a.className = `card size-${exp.size}`;
+  a.dataset.category = exp.category;
+  a.style.setProperty('--accent', exp.accent);
+  a.style.setProperty('--glow', exp.accent + '18');
+  a.style.setProperty('--stagger', i);
+
+  a.innerHTML = `
+    <div class="card-visual">
+      <div class="card-thumb" style="background-image: url(thumbs/${exp.file}.jpg);"></div>
+      <div class="card-visual-bg" style="background: ${exp.gradient}; --anim-dur: ${exp.animDur}; --spin-dur: ${exp.spinDur}; --anim-delay: -${i * 1.5}s;"></div>
+      <div class="card-desc">${exp.desc}</div>
+    </div>
+    <div class="card-info">
+      <div class="card-title">${exp.title}</div>
+      <span class="card-tag">${exp.tag}</span>
+    </div>
+  `;
+
+  a.addEventListener('click', function(e) {
+    const rect = this.getBoundingClientRect();
+    const ripple = document.createElement('span');
+    ripple.className = 'ripple';
+    const size = Math.max(rect.width, rect.height);
+    ripple.style.width = ripple.style.height = size + 'px';
+    ripple.style.left = (e.clientX - rect.left - size / 2) + 'px';
+    ripple.style.top = (e.clientY - rect.top - size / 2) + 'px';
+    this.appendChild(ripple);
+    setTimeout(() => ripple.remove(), 600);
+  });
+
+  bentoEl.appendChild(a);
+});
+
+// ── Scroll Reveal ─────────────────────────────────────────────
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      entry.target.classList.add('revealed');
+      observer.unobserve(entry.target);
+    }
+  });
+}, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+
+document.querySelectorAll('.card').forEach(card => observer.observe(card));
+</script>
+</body>
+</html>

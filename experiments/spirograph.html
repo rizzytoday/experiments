@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spirograph</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box }
+body { background: #0a0008; overflow:hidden; cursor:crosshair }
+canvas { display:block }
+#controls {
+  position:fixed; bottom:20px; right:20px; z-index:10;
+  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255,107,157,0.1); font: 11px/1.6 monospace;
+  border-radius: 14px; background: rgba(20,0,10,0.75); color: rgba(255,107,157,0.55);
+  box-shadow: 0 4px 24px rgba(0,0,0,0.3); padding: 14px 18px; min-width: 190px;
+}
+#controls label { display:flex; justify-content:space-between; align-items:center; margin:5px 0 }
+#controls span.v { min-width:42px; text-align:right; color:rgba(255,107,157,0.8) }
+input[type=range] {
+  -webkit-appearance:none; width:100px; height:3px; background:rgba(255,107,157,0.12);
+  border-radius:2px; outline:none; margin:0 8px;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance:none; width:12px; height:12px; background:#ff6b9d; border-radius:50%; cursor:pointer;
+}
+.toggle { cursor:pointer; user-select:none }
+.toggle:hover { color: rgba(255,107,157,0.8) }
+.hint { color:rgba(255,107,157,0.2); margin-top:10px; font-size:10px; line-height:1.5 }
+#readout {
+  position:fixed; bottom:20px; left:20px; font: 12px monospace;
+  color: rgba(255,107,157,0.35); z-index:10;
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="controls">
+  <label>ratio <input type="range" id="sRatio" min="1.5" max="12" step="0.1" value="3.5"><span class="v" id="vRatio">3.5</span></label>
+  <label>pen d <input type="range" id="sD" min="0.1" max="1.5" step="0.05" value="0.8"><span class="v" id="vD">0.80</span></label>
+  <label>speed <input type="range" id="sSpeed" min="0.5" max="5" step="0.1" value="2"><span class="v" id="vSpeed">2.0</span></label>
+  <label>fade <input type="range" id="sFade" min="0" max="0.05" step="0.001" value="0.008"><span class="v" id="vFade">0.008</span></label>
+  <div class="toggle" id="typeToggle">mode: hypotrochoid</div>
+  <div class="hint">Space pause · R reset · G guides · T type</div>
+</div>
+<div id="readout">t: 0.00</div>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const offscreen = document.createElement('canvas');
+const octx = offscreen.getContext('2d');
+
+let W, H, dpr;
+function resize() {
+  W = window.innerWidth; H = window.innerHeight;
+  dpr = window.devicePixelRatio || 1;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  offscreen.width = W * dpr; offscreen.height = H * dpr;
+  octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  resetDraw();
+}
+
+const sRatio = document.getElementById('sRatio'), vRatio = document.getElementById('vRatio');
+const sD = document.getElementById('sD'), vD = document.getElementById('vD');
+const sSpeed = document.getElementById('sSpeed'), vSpeed = document.getElementById('vSpeed');
+const sFade = document.getElementById('sFade'), vFade = document.getElementById('vFade');
+const typeToggle = document.getElementById('typeToggle');
+const readout = document.getElementById('readout');
+
+let isHypo = true, paused = false, showGuides = true;
+let t = 0, prevX = null, prevY = null, lastTime = 0;
+const R = 150;
+
+function getParams() {
+  const ratio = parseFloat(sRatio.value);
+  const d = parseFloat(sD.value);
+  const speed = parseFloat(sSpeed.value);
+  const fade = parseFloat(sFade.value);
+  return { ratio, d, speed, fade, r: R / ratio };
+}
+
+function point(t, p) {
+  const r = p.r, d_abs = p.d * R;
+  let x, y;
+  if (isHypo) {
+    x = (R - r) * Math.cos(t) + d_abs * Math.cos((R - r) / r * t);
+    y = (R - r) * Math.sin(t) - d_abs * Math.sin((R - r) / r * t);
+  } else {
+    x = (R + r) * Math.cos(t) - d_abs * Math.cos((R + r) / r * t);
+    y = (R + r) * Math.sin(t) - d_abs * Math.sin((R + r) / r * t);
+  }
+  return { x: x + W / 2, y: y + H / 2 };
+}
+
+function resetDraw() {
+  t = 0; prevX = null; prevY = null; lastTime = 0;
+  octx.clearRect(0, 0, W, H);
+  ctx.clearRect(0, 0, W, H);
+}
+
+function drawGuides(p) {
+  const cx = W / 2, cy = H / 2;
+  ctx.strokeStyle = 'rgba(255,107,157,0.08)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
+  const r = p.r, d_abs = p.d * R;
+  let rcx, rcy;
+  if (isHypo) {
+    rcx = cx + (R - r) * Math.cos(t);
+    rcy = cy + (R - r) * Math.sin(t);
+  } else {
+    rcx = cx + (R + r) * Math.cos(t);
+    rcy = cy + (R + r) * Math.sin(t);
+  }
+  ctx.strokeStyle = 'rgba(255,107,157,0.06)';
+  ctx.beginPath(); ctx.arc(rcx, rcy, r, 0, Math.PI * 2); ctx.stroke();
+  const pt = point(t, p);
+  ctx.strokeStyle = 'rgba(255,107,157,0.12)';
+  ctx.beginPath(); ctx.moveTo(rcx, rcy); ctx.lineTo(pt.x, pt.y); ctx.stroke();
+  ctx.fillStyle = '#ff6b9d';
+  ctx.beginPath(); ctx.arc(pt.x, pt.y, 2.5, 0, Math.PI * 2); ctx.fill();
+}
+
+function draw(now) {
+  requestAnimationFrame(draw);
+  if (!lastTime) lastTime = now;
+  const dt = Math.min((now - lastTime) / 1000, 0.05);
+  lastTime = now;
+  if (paused) { composite(); return; }
+
+  const p = getParams();
+  const steps = Math.max(1, Math.round(p.speed * 60 * dt));
+  const inc = 0.02 * p.speed;
+
+  if (p.fade > 0) {
+    octx.fillStyle = `rgba(10,0,8,${p.fade})`;
+    octx.fillRect(0, 0, W, H);
+  }
+
+  octx.lineWidth = 1.5;
+  for (let i = 0; i < steps; i++) {
+    const pt = point(t, p);
+    if (prevX !== null) {
+      const hue = (t * 15) % 360;
+      octx.strokeStyle = `hsl(${hue},85%,60%)`;
+      octx.beginPath();
+      octx.moveTo(prevX, prevY);
+      octx.lineTo(pt.x, pt.y);
+      octx.stroke();
+    }
+    prevX = pt.x; prevY = pt.y;
+    t += inc / steps;
+  }
+
+  composite();
+  readout.textContent = `t: ${t.toFixed(2)}`;
+}
+
+function composite() {
+  ctx.clearRect(0, 0, W, H);
+  ctx.drawImage(offscreen, 0, 0, W, H);
+  if (showGuides) drawGuides(getParams());
+}
+
+function updateReadouts() {
+  vRatio.textContent = parseFloat(sRatio.value).toFixed(1);
+  vD.textContent = parseFloat(sD.value).toFixed(2);
+  vSpeed.textContent = parseFloat(sSpeed.value).toFixed(1);
+  vFade.textContent = parseFloat(sFade.value).toFixed(3);
+}
+
+[sRatio, sD].forEach(s => s.addEventListener('input', () => { updateReadouts(); resetDraw(); }));
+[sSpeed, sFade].forEach(s => s.addEventListener('input', updateReadouts));
+
+typeToggle.addEventListener('click', () => {
+  isHypo = !isHypo;
+  typeToggle.textContent = `mode: ${isHypo ? 'hypotrochoid' : 'epitrochoid'}`;
+  resetDraw();
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === ' ') { e.preventDefault(); paused = !paused; }
+  if (e.key === 'r' || e.key === 'R') resetDraw();
+  if (e.key === 'g' || e.key === 'G') showGuides = !showGuides;
+  if (e.key === 't' || e.key === 'T') { typeToggle.click(); }
+});
+
+window.addEventListener('resize', resize);
+resize();
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>

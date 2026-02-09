@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Warp – Domain Warping</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; overflow: hidden; cursor: crosshair; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #overlay {
+    position: fixed; bottom: 16px; left: 16px;
+    font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px;
+    color: rgba(255,255,255,0.5); pointer-events: none; z-index: 10;
+    line-height: 1.6;
+  }
+  #overlay span { color: rgba(255,255,255,0.3); }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="overlay">
+  03 – Domain Warping<br>
+  <span>mouse: stir warp &nbsp; scroll: warp depth &nbsp; space: pause &nbsp; s: screenshot</span>
+</div>
+<script>
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl', { antialias: false, preserveDrawingBuffer: true });
+
+let mouse = [0.5, 0.5], time = 0, paused = false, depth = 1.0;
+
+const vsrc = `attribute vec2 a_pos;
+void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
+
+const fsrc = `precision highp float;
+uniform float u_time;
+uniform vec2 u_resolution;
+uniform vec2 u_mouse;
+uniform float u_depth;
+
+// Random
+float hash(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.13);
+  p3 += dot(p3, p3.yzx + 3.333);
+  return fract((p3.x + p3.y) * p3.z);
+}
+
+// Value noise
+float noise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+
+  float a = hash(i);
+  float b = hash(i + vec2(1.0, 0.0));
+  float c = hash(i + vec2(0.0, 1.0));
+  float d = hash(i + vec2(1.0, 1.0));
+
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// fBm
+float fbm(vec2 p) {
+  float v = 0.0;
+  float a = 0.5;
+  mat2 rot = mat2(cos(0.5), sin(0.5), -sin(0.5), cos(0.5));
+  for (int i = 0; i < 6; i++) {
+    v += a * noise(p);
+    p = rot * p * 2.0 + vec2(100.0);
+    a *= 0.5;
+  }
+  return v;
+}
+
+// IQ-style domain warping: f(p + f(p + f(p)))
+// Each layer feeds its output as offset to the next
+float pattern(vec2 p, out vec2 q, out vec2 r) {
+  float t = u_time * 0.15;
+  vec2 mouseOffset = (u_mouse - 0.5) * 2.0;
+
+  q = vec2(
+    fbm(p + vec2(0.0, 0.0) + mouseOffset * 0.3),
+    fbm(p + vec2(5.2, 1.3) + mouseOffset * 0.2)
+  );
+
+  r = vec2(
+    fbm(p + 4.0 * q * u_depth + vec2(1.7, 9.2) + vec2(t * 0.3, t * 0.2)),
+    fbm(p + 4.0 * q * u_depth + vec2(8.3, 2.8) + vec2(t * 0.2, -t * 0.1))
+  );
+
+  return fbm(p + 4.0 * r * u_depth);
+}
+
+// Color palette – warm ambers, deep teals, cosmic purples
+vec3 palette(float t, vec2 q, vec2 r) {
+  // Base colors driven by the warp layers
+  vec3 col = vec3(0.0);
+
+  // Layer 1: warm amber/gold from q
+  col = mix(vec3(0.1, 0.05, 0.02), vec3(0.8, 0.5, 0.15), clamp(length(q) * 1.5, 0.0, 1.0));
+
+  // Layer 2: deep teal from r
+  col = mix(col, vec3(0.05, 0.35, 0.4), clamp(r.x * r.x * 2.0, 0.0, 0.7));
+
+  // Layer 3: cosmic purple from pattern value
+  col = mix(col, vec3(0.3, 0.1, 0.45), clamp(t * t * 1.5 - 0.2, 0.0, 0.5));
+
+  // Hot highlights
+  col += vec3(1.0, 0.7, 0.3) * pow(clamp(t * 1.3, 0.0, 1.0), 4.0) * 0.5;
+
+  // Dark depth
+  col *= 0.3 + 0.7 * smoothstep(-0.2, 0.8, t);
+
+  return col;
+}
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / u_resolution;
+  vec2 p = (gl_FragCoord.xy - 0.5 * u_resolution) / u_resolution.y;
+  p *= 1.5;
+
+  vec2 q, r;
+  float f = pattern(p, q, r);
+
+  vec3 col = palette(f, q, r);
+
+  // Subtle structure lines from derivatives
+  float dx = pattern(p + vec2(0.005, 0.0), q, r) - f;
+  float dy = pattern(p + vec2(0.0, 0.005), q, r) - f;
+  float edge = length(vec2(dx, dy)) * 80.0;
+  col += edge * vec3(0.15, 0.1, 0.2);
+
+  // Tone mapping
+  col = col / (1.0 + col);
+  col = pow(col, vec3(0.4545));
+
+  // Vignette
+  col *= 0.5 + 0.5 * pow(16.0 * uv.x * uv.y * (1.0 - uv.x) * (1.0 - uv.y), 0.2);
+
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  gl.viewport(0, 0, canvas.width, canvas.height);
+}
+resize();
+window.addEventListener('resize', resize);
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
+    console.error(gl.getShaderInfoLog(s));
+  return s;
+}
+
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(gl.VERTEX_SHADER, vsrc));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fsrc));
+gl.linkProgram(prog);
+gl.useProgram(prog);
+
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+const aPos = gl.getAttribLocation(prog, 'a_pos');
+gl.enableVertexAttribArray(aPos);
+gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+const uTime = gl.getUniformLocation(prog, 'u_time');
+const uRes = gl.getUniformLocation(prog, 'u_resolution');
+const uMouse = gl.getUniformLocation(prog, 'u_mouse');
+const uDepth = gl.getUniformLocation(prog, 'u_depth');
+
+canvas.addEventListener('mousemove', e => {
+  mouse = [e.clientX / window.innerWidth, 1.0 - e.clientY / window.innerHeight];
+});
+canvas.addEventListener('wheel', e => {
+  depth = Math.max(0.1, Math.min(3.0, depth + e.deltaY * 0.002));
+  e.preventDefault();
+}, { passive: false });
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space') { paused = !paused; e.preventDefault(); }
+  if (e.code === 'KeyS') {
+    const link = document.createElement('a');
+    link.download = 'shader-warp.png';
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  }
+  if (e.key >= '1' && e.key <= '8') {
+    const files = ['shader-sdf','shader-noise','shader-warp','shader-feedback','shader-cosmos','shader-audio','shader-morph','shader-physarum'];
+    window.location.href = files[e.key - 1] + '.html';
+  }
+});
+
+function frame(now) {
+  if (!paused) time = now * 0.001;
+  gl.uniform1f(uTime, time);
+  gl.uniform2f(uRes, canvas.width, canvas.height);
+  gl.uniform2f(uMouse, mouse[0], mouse[1]);
+  gl.uniform1f(uDepth, depth);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

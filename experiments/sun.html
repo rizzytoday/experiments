@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gravity Well</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000; overflow: hidden; cursor: crosshair; }
+canvas { display: block; }
+.controls {
+  position: fixed; bottom: 16px; right: 16px;
+  background: rgba(0,0,0,0.6); backdrop-filter: blur(30px) saturate(120%);
+  border: 1px solid rgba(255,255,255,0.06); border-radius: 14px;
+  padding: 14px 18px; font: 11px/1.6 monospace; color: rgba(255,255,255,0.35);
+  min-width: 210px; z-index: 10;
+  box-shadow: 0 4px 30px rgba(0,0,0,0.5);
+}
+.controls label { display: flex; justify-content: space-between; align-items: center; margin: 4px 0; }
+.controls span { min-width: 42px; text-align: right; color: rgba(255,255,255,0.55); }
+input[type=range] {
+  -webkit-appearance: none; width: 90px; height: 2px; background: rgba(255,255,255,0.08);
+  border-radius: 2px; outline: none; margin: 0 8px;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 10px; height: 10px;
+  background: rgba(255,255,255,0.7); border-radius: 50%; cursor: pointer;
+}
+.hint { color: rgba(255,255,255,0.15); margin-top: 8px; font-size: 10px; line-height: 1.5; }
+.stat { color: rgba(255,255,255,0.4); font-size: 12px; margin-bottom: 6px; letter-spacing: 0.5px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="controls">
+  <div class="stat" id="massRead">mass: 0</div>
+  <label>brightness <input type="range" id="bright" min="0.1" max="1" step="0.05" value="0.5"> <span id="brightV">0.50</span></label>
+  <label>spawn <input type="range" id="spawn" min="1" max="12" step="1" value="4"> <span id="spawnV">4</span></label>
+  <label>gravity <input type="range" id="gravity" min="100" max="2000" step="50" value="600"> <span id="gravityV">600</span></label>
+  <label>trail <input type="range" id="trail" min="0.01" max="0.12" step="0.005" value="0.025"> <span id="trailV">0.025</span></label>
+  <label>drift <input type="range" id="drift" min="0" max="1" step="0.05" value="0.3"> <span id="driftV">0.30</span></label>
+  <div class="hint">everything falls in · hover: second well<br>click: burst · r: reset</div>
+</div>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let G = 600;
+let spawnRate = 4;
+let fadeFactor = 0.025;
+let orbitDrift = 0.3;
+let brightness = 0.5;
+let paused = false;
+let mouseX = -1, mouseY = -1;
+let lastT = 0;
+
+let mass = 0;
+let coreRadius = 6;
+let corePulse = 0;
+let particles = [];
+
+const brightEl = document.getElementById('bright');
+const spawnEl = document.getElementById('spawn');
+const gravityEl = document.getElementById('gravity');
+const trailEl = document.getElementById('trail');
+const driftEl = document.getElementById('drift');
+
+brightEl.oninput = () => { brightness = +brightEl.value; document.getElementById('brightV').textContent = brightness.toFixed(2); };
+spawnEl.oninput = () => { spawnRate = +spawnEl.value; document.getElementById('spawnV').textContent = spawnRate; };
+gravityEl.oninput = () => { G = +gravityEl.value; document.getElementById('gravityV').textContent = G; };
+trailEl.oninput = () => { fadeFactor = +trailEl.value; document.getElementById('trailV').textContent = fadeFactor.toFixed(3); };
+driftEl.oninput = () => { orbitDrift = +driftEl.value; document.getElementById('driftV').textContent = orbitDrift.toFixed(2); };
+
+function makeParticle(burst) {
+  const w = window.innerWidth, h = window.innerHeight;
+  const cx = w / 2, cy = h / 2;
+
+  // Spawn from edges
+  const edge = Math.random() * 4;
+  let x, y;
+  if (edge < 1) { x = Math.random() * w; y = -20 - Math.random() * 80; }
+  else if (edge < 2) { x = w + 20 + Math.random() * 80; y = Math.random() * h; }
+  else if (edge < 3) { x = Math.random() * w; y = h + 20 + Math.random() * 80; }
+  else { x = -20 - Math.random() * 80; y = Math.random() * h; }
+
+  const dx = cx - x, dy = cy - y;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+
+  let vx, vy;
+  if (burst) {
+    const speed = 30 + Math.random() * 80;
+    const tangent = (Math.random() - 0.5) * 1.5;
+    vx = (dx / dist) * speed + (-dy / dist) * speed * tangent * 0.4;
+    vy = (dy / dist) * speed + (dx / dist) * speed * tangent * 0.4;
+  } else {
+    const orbitalSpeed = Math.sqrt(G / dist) * (0.6 + Math.random() * 0.8);
+    const drift = (Math.random() - 0.5) * orbitDrift * 40;
+    const sign = Math.random() > 0.5 ? 1 : -1;
+    vx = (-dy / dist) * orbitalSpeed * sign + (dx / dist) * drift;
+    vy = (dx / dist) * orbitalSpeed * sign + (dy / dist) * drift;
+  }
+
+  // Meteor trail length varies
+  const tailLen = 3 + Math.floor(Math.random() * 5);
+
+  return {
+    x, y, vx, vy,
+    size: 0.4 + Math.random() * 1.2,
+    temp: 0,
+    trail: [], // position history for meteor tail
+    tailLen
+  };
+}
+
+function init() {
+  mass = 0; coreRadius = 6; corePulse = 0;
+  particles = [];
+  for (let i = 0; i < 300; i++) particles.push(makeParticle(false));
+}
+init();
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = window.innerWidth * dpr;
+  canvas.height = window.innerHeight * dpr;
+  canvas.style.width = window.innerWidth + 'px';
+  canvas.style.height = window.innerHeight + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+resize();
+window.addEventListener('resize', resize);
+
+canvas.addEventListener('mousemove', (e) => { mouseX = e.clientX; mouseY = e.clientY; });
+canvas.addEventListener('mouseleave', () => { mouseX = -1; mouseY = -1; });
+canvas.addEventListener('click', () => {
+  for (let i = 0; i < 40; i++) particles.push(makeParticle(true));
+});
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space') { e.preventDefault(); paused = !paused; }
+  if (e.key === 'r' || e.key === 'R') init();
+});
+
+function draw(t) {
+  const dt = Math.min((t - lastT) * 0.001, 0.04);
+  lastT = t;
+
+  const w = window.innerWidth, h = window.innerHeight;
+  const cx = w / 2, cy = h / 2;
+
+  ctx.fillStyle = `rgba(0,0,0,${fadeFactor})`;
+  ctx.fillRect(0, 0, w, h);
+
+  const targetCoreR = 6 + Math.sqrt(mass) * 0.25;
+  coreRadius += (targetCoreR - coreRadius) * 0.02;
+  corePulse *= 0.93;
+
+  const effectiveG = G * (1 + mass * 0.0005);
+
+  if (!paused) {
+    for (let i = 0; i < spawnRate; i++) {
+      if (particles.length < 2000) particles.push(makeParticle(false));
+    }
+
+    let consumed = 0;
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+
+      // Save position for trail
+      p.trail.push({ x: p.x, y: p.y });
+      if (p.trail.length > p.tailLen) p.trail.shift();
+
+      const dx = cx - p.x, dy = cy - p.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const safeDist = Math.max(dist, 3);
+
+      const gForce = effectiveG / (safeDist * safeDist) * safeDist;
+      p.vx += (dx / safeDist) * gForce * dt;
+      p.vy += (dy / safeDist) * gForce * dt;
+
+      p.vx += (dx / safeDist) * orbitDrift * 8 * dt;
+      p.vy += (dy / safeDist) * orbitDrift * 8 * dt;
+
+      if (mouseX >= 0) {
+        const mx = mouseX - p.x, my = mouseY - p.y;
+        const md = Math.sqrt(mx * mx + my * my);
+        if (md > 3) {
+          const mForce = effectiveG * 0.3 / (md * md) * md;
+          p.vx += (mx / md) * mForce * dt;
+          p.vy += (my / md) * mForce * dt;
+        }
+      }
+
+      p.vx *= 0.9997;
+      p.vy *= 0.9997;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+
+      p.temp = Math.max(0, 1 - dist / (Math.min(w, h) * 0.4));
+
+      if (dist < coreRadius * 1.2) {
+        consumed++;
+        particles.splice(i, 1);
+        continue;
+      }
+
+      if (p.x < -300 || p.x > w + 300 || p.y < -300 || p.y > h + 300) {
+        particles[i] = makeParticle(false);
+      }
+    }
+
+    mass += consumed;
+    if (consumed > 0) corePulse = Math.min(corePulse + consumed * 0.15, 1.5);
+  }
+
+  // Draw particles as meteor streaks
+  const br = brightness;
+  ctx.lineCap = 'round';
+
+  for (const p of particles) {
+    const temp = p.temp;
+
+    // Color: cool dim → warm bright based on temp
+    let r, g, b;
+    if (temp < 0.3) {
+      const f = temp / 0.3;
+      r = 60 + 60 * f; g = 70 + 80 * f; b = 100 + 80 * f;
+    } else if (temp < 0.7) {
+      const f = (temp - 0.3) / 0.4;
+      r = 120 + 100 * f; g = 150 + 70 * f; b = 180 - 20 * f;
+    } else {
+      const f = (temp - 0.7) / 0.3;
+      r = 220 + 35 * f; g = 220 + 35 * f; b = 160 + 60 * f;
+    }
+
+    // Draw meteor tail (line from oldest trail point to current pos)
+    if (p.trail.length > 1) {
+      for (let i = 0; i < p.trail.length; i++) {
+        const frac = i / p.trail.length;
+        const alpha = frac * (0.15 + temp * 0.25) * br;
+        const width = p.size * frac * 0.8;
+
+        if (i > 0) {
+          ctx.strokeStyle = `rgba(${r},${g},${b},${alpha})`;
+          ctx.lineWidth = width;
+          ctx.beginPath();
+          ctx.moveTo(p.trail[i - 1].x, p.trail[i - 1].y);
+          ctx.lineTo(p.trail[i].x, p.trail[i].y);
+          ctx.stroke();
+        }
+      }
+
+      // Line from last trail to current
+      const lastT = p.trail[p.trail.length - 1];
+      const headAlpha = (0.3 + temp * 0.5) * br;
+      ctx.strokeStyle = `rgba(${r},${g},${b},${headAlpha})`;
+      ctx.lineWidth = p.size;
+      ctx.beginPath();
+      ctx.moveTo(lastT.x, lastT.y);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+    }
+
+    // Bright head point
+    const headA = (0.4 + temp * 0.5) * br;
+    ctx.fillStyle = `rgba(${r},${g},${b},${headA})`;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size * 0.6, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Hot glow near core
+    if (temp > 0.6) {
+      const glowA = (temp - 0.6) * 0.08 * br;
+      ctx.fillStyle = `rgba(${r},${g},${b},${glowA})`;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size * 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // Core glow layers – all scaled by brightness
+  const pulseR = coreRadius + corePulse * 15;
+  const massGlow = Math.min(1, mass * 0.002);
+
+  // Outermost halo
+  const g4 = ctx.createRadialGradient(cx, cy, coreRadius, cx, cy, pulseR + 100 + mass * 0.12);
+  g4.addColorStop(0, `rgba(180,200,255,${(0.008 + massGlow * 0.015) * br})`);
+  g4.addColorStop(0.4, `rgba(150,170,220,${(0.004 + massGlow * 0.008) * br})`);
+  g4.addColorStop(1, 'rgba(150,170,220,0)');
+  ctx.fillStyle = g4;
+  ctx.fillRect(0, 0, w, h);
+
+  // Mid glow
+  const g3 = ctx.createRadialGradient(cx, cy, coreRadius * 0.5, cx, cy, pulseR + 40 + mass * 0.06);
+  g3.addColorStop(0, `rgba(200,220,255,${(0.03 + massGlow * 0.04 + corePulse * 0.06) * br})`);
+  g3.addColorStop(0.6, `rgba(180,200,240,${(0.01 + massGlow * 0.02) * br})`);
+  g3.addColorStop(1, 'rgba(180,200,240,0)');
+  ctx.fillStyle = g3;
+  ctx.fillRect(0, 0, w, h);
+
+  // Inner glow
+  const g2 = ctx.createRadialGradient(cx, cy, 0, cx, cy, pulseR + 12);
+  g2.addColorStop(0, `rgba(255,255,255,${(0.1 + massGlow * 0.1 + corePulse * 0.15) * br})`);
+  g2.addColorStop(0.5, `rgba(220,230,255,${(0.05 + massGlow * 0.04) * br})`);
+  g2.addColorStop(1, 'rgba(220,230,255,0)');
+  ctx.fillStyle = g2;
+  ctx.beginPath();
+  ctx.arc(cx, cy, pulseR + 12, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Core point
+  const g1 = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreRadius);
+  g1.addColorStop(0, `rgba(255,255,255,${(0.7 + corePulse * 0.1) * br})`);
+  g1.addColorStop(0.6, `rgba(230,240,255,${(0.4 + massGlow * 0.15) * br})`);
+  g1.addColorStop(1, `rgba(200,220,255,${0.05 * br})`);
+  ctx.fillStyle = g1;
+  ctx.beginPath();
+  ctx.arc(cx, cy, coreRadius, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Mouse well
+  if (mouseX >= 0) {
+    const g5 = ctx.createRadialGradient(mouseX, mouseY, 0, mouseX, mouseY, 20);
+    g5.addColorStop(0, `rgba(255,255,255,${0.04 * br})`);
+    g5.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g5;
+    ctx.beginPath();
+    ctx.arc(mouseX, mouseY, 20, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  document.getElementById('massRead').textContent = `mass: ${mass}`;
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>

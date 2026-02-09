@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Living Code</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #000;
+    overflow: hidden;
+    cursor: crosshair;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  }
+  canvas { display: block; position: fixed; top: 0; left: 0; }
+  #overlay {
+    position: fixed;
+    bottom: 20px;
+    left: 20px;
+    color: rgba(255,255,255,0.25);
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    pointer-events: none;
+    z-index: 10;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+  }
+  #entropy-bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    z-index: 10;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="entropy-bar"></div>
+<div id="overlay">entropy: <span id="e-val">0.00</span> | mutations: <span id="m-val">0</span> | generation: <span id="g-val">0</span></div>
+
+<script>
+// ============================================================
+//  LIVING CODE – generative art by zen × claude
+//  A self-rewriting system where code characters mutate,
+//  patterns emerge from noise, and entropy drives everything.
+// ============================================================
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const eVal = document.getElementById('e-val');
+const mVal = document.getElementById('m-val');
+const gVal = document.getElementById('g-val');
+const entropyBar = document.getElementById('entropy-bar');
+
+let W, H;
+const resize = () => {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+};
+resize();
+window.addEventListener('resize', resize);
+
+// --- Simplex-inspired noise (fast 2D) ---
+class Noise {
+  constructor(seed = Math.random() * 65536) {
+    this.p = new Uint8Array(512);
+    const perm = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) perm[i] = i;
+    let s = seed | 0;
+    for (let i = 255; i > 0; i--) {
+      s = (s * 16807 + 0) % 2147483647;
+      const j = s % (i + 1);
+      [perm[i], perm[j]] = [perm[j], perm[i]];
+    }
+    for (let i = 0; i < 512; i++) this.p[i] = perm[i & 255];
+  }
+  noise2D(x, y) {
+    const xi = Math.floor(x) & 255, yi = Math.floor(y) & 255;
+    const xf = x - Math.floor(x), yf = y - Math.floor(y);
+    const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+    const p = this.p;
+    const a = p[xi] + yi, b = p[xi + 1] + yi;
+    const grad = (hash, gx, gy) => {
+      const h = hash & 3;
+      return (h < 2 ? (h === 0 ? gx : -gx) : 0) + (h < 2 ? 0 : (h === 2 ? gy : -gy));
+    };
+    const lerp = (a, b, t) => a + t * (b - a);
+    return lerp(
+      lerp(grad(p[a], xf, yf), grad(p[b], xf - 1, yf), u),
+      lerp(grad(p[a + 1], xf, yf - 1), grad(p[b + 1], xf - 1, yf - 1), u),
+      v
+    );
+  }
+}
+
+const noise = new Noise();
+const noise2 = new Noise(42069);
+
+// --- Code genome ---
+const CHARSETS = {
+  code: '{}[]()<>=;:.,|&!?/\\+-*%@#$^~`',
+  alpha: 'abcdefghijklmnopqrstuvwxyz',
+  num: '0123456789',
+  symbols: '░▒▓█▄▀■□▪▫●○◆◇★☆△▽◁▷',
+  kanji: '永遠無限虚空夢幻光闇風火水土雷',
+  binary: '01',
+  hex: '0123456789ABCDEF',
+};
+
+const ALL_CHARS = Object.values(CHARSETS).join('');
+
+// --- Grid system ---
+const CELL = 14;
+let cols, rows, grid, gridAge, gridVelocity, gridHue;
+
+function initGrid() {
+  cols = Math.ceil(W / CELL) + 1;
+  rows = Math.ceil(H / CELL) + 1;
+  grid = [];
+  gridAge = [];
+  gridVelocity = [];
+  gridHue = [];
+  for (let i = 0; i < cols * rows; i++) {
+    grid[i] = ALL_CHARS[Math.floor(Math.random() * ALL_CHARS.length)];
+    gridAge[i] = Math.random() * 200;
+    gridVelocity[i] = (Math.random() - 0.5) * 2;
+    gridHue[i] = Math.random() * 360;
+  }
+}
+initGrid();
+window.addEventListener('resize', initGrid);
+
+// --- State ---
+let time = 0;
+let entropy = 0.5;
+let targetEntropy = 0.5;
+let mutations = 0;
+let generation = 0;
+let mouseX = W / 2, mouseY = H / 2;
+let mouseActive = false;
+
+// --- Particles ---
+const particles = [];
+const MAX_PARTICLES = 600;
+
+class Particle {
+  constructor(x, y, hue) {
+    this.x = x;
+    this.y = y;
+    this.vx = (Math.random() - 0.5) * 4;
+    this.vy = (Math.random() - 0.5) * 4;
+    this.life = 1;
+    this.decay = 0.005 + Math.random() * 0.02;
+    this.size = 1 + Math.random() * 3;
+    this.hue = hue;
+    this.char = ALL_CHARS[Math.floor(Math.random() * ALL_CHARS.length)];
+    this.useChar = Math.random() > 0.6;
+  }
+  update() {
+    const nx = noise.noise2D(this.x * 0.003, time * 0.5) * 2;
+    const ny = noise.noise2D(this.y * 0.003, time * 0.5 + 100) * 2;
+    this.vx += nx * 0.1;
+    this.vy += ny * 0.1;
+    this.vx *= 0.98;
+    this.vy *= 0.98;
+    this.x += this.vx;
+    this.y += this.vy;
+    this.life -= this.decay;
+    return this.life > 0;
+  }
+  draw() {
+    const a = this.life * 0.8;
+    if (this.useChar) {
+      ctx.fillStyle = `hsla(${this.hue}, 70%, 65%, ${a})`;
+      ctx.font = `${10 + this.size * 2}px monospace`;
+      ctx.fillText(this.char, this.x, this.y);
+    } else {
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.size * this.life, 0, Math.PI * 2);
+      ctx.fillStyle = `hsla(${this.hue}, 80%, 60%, ${a})`;
+      ctx.fill();
+    }
+  }
+}
+
+// --- Entropy events ---
+const events = [];
+
+function triggerEvent(x, y, type) {
+  events.push({ x, y, type, time: 0, maxTime: 60 + Math.random() * 40 });
+
+  const hue = type === 'compile' ? 140 :
+              type === 'error' ? 0 :
+              type === 'mutation' ? 280 : 50;
+
+  const count = type === 'compile' ? 40 : type === 'error' ? 25 : 12;
+  for (let i = 0; i < count && particles.length < MAX_PARTICLES; i++) {
+    particles.push(new Particle(x, y, hue + Math.random() * 40 - 20));
+  }
+}
+
+// --- Mutation logic ---
+function mutateGrid() {
+  const mutationRate = entropy * 0.15;
+  const waveX = Math.sin(time * 0.7) * cols * 0.3 + cols * 0.5;
+  const waveY = Math.cos(time * 0.5) * rows * 0.3 + rows * 0.5;
+
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const i = y * cols + x;
+      const n = noise.noise2D(x * 0.08 + time * 0.3, y * 0.08 + time * 0.2);
+      const n2 = noise2.noise2D(x * 0.05 - time * 0.15, y * 0.05 + time * 0.25);
+
+      // Distance from noise wave center
+      const dx = x - waveX, dy = y - waveY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const waveFactor = Math.max(0, 1 - dist / (Math.max(cols, rows) * 0.4));
+
+      // Mouse influence
+      let mouseFactor = 0;
+      if (mouseActive) {
+        const mx = mouseX / CELL - x, my = mouseY / CELL - y;
+        const md = Math.sqrt(mx * mx + my * my);
+        mouseFactor = Math.max(0, 1 - md / 15) * 0.5;
+      }
+
+      const shouldMutate = (n * 0.5 + 0.5) * (mutationRate + waveFactor * 0.3 + mouseFactor) > 0.85;
+
+      if (shouldMutate) {
+        // Pick charset based on local noise
+        const setIndex = Math.abs(n2 * Object.keys(CHARSETS).length) | 0;
+        const charset = Object.values(CHARSETS)[setIndex % Object.values(CHARSETS).length];
+        grid[i] = charset[Math.floor(Math.random() * charset.length)];
+        gridAge[i] = 0;
+        gridVelocity[i] = (Math.random() - 0.5) * 3;
+        mutations++;
+
+        // Occasionally trigger events
+        if (Math.random() < 0.002) {
+          const types = ['compile', 'error', 'mutation', 'shift'];
+          triggerEvent(x * CELL, y * CELL, types[Math.floor(Math.random() * types.length)]);
+        }
+      }
+
+      gridAge[i] += 0.5 + n * 0.3;
+      gridHue[i] += gridVelocity[i] * 0.5;
+      gridVelocity[i] *= 0.995;
+    }
+  }
+}
+
+// --- Entropy oscillation ---
+function updateEntropy() {
+  // Entropy shifts on its own timeline – sometimes ordered, sometimes chaotic
+  const wave1 = Math.sin(time * 0.3) * 0.3;
+  const wave2 = Math.sin(time * 0.17 + 2) * 0.2;
+  const wave3 = noise.noise2D(time * 0.1, 0) * 0.25;
+  targetEntropy = 0.5 + wave1 + wave2 + wave3;
+  targetEntropy = Math.max(0.05, Math.min(0.98, targetEntropy));
+
+  // Mouse increases entropy
+  if (mouseActive) targetEntropy = Math.min(0.95, targetEntropy + 0.2);
+
+  entropy += (targetEntropy - entropy) * 0.02;
+
+  // Generation ticks
+  if (Math.random() < 0.005) generation++;
+}
+
+// --- Render ---
+function drawGrid() {
+  const baseHue = time * 15;
+
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const i = y * cols + x;
+      const age = gridAge[i];
+      const char = grid[i];
+
+      // Young cells are bright, old cells fade
+      const freshness = Math.max(0, 1 - age / 150);
+      const n = noise.noise2D(x * 0.1 + time * 0.2, y * 0.1) * 0.5 + 0.5;
+
+      // Base alpha from noise field
+      let alpha = 0.03 + n * 0.15 + freshness * 0.7;
+
+      // Flow field visibility
+      const flowN = noise2.noise2D(x * 0.02 + time * 0.1, y * 0.02 - time * 0.08);
+      if (flowN > 0.2) alpha += (flowN - 0.2) * 0.4;
+
+      // Entropy affects overall visibility
+      alpha *= 0.5 + entropy * 0.5;
+      alpha = Math.min(1, alpha);
+
+      if (alpha < 0.02) continue;
+
+      // Color
+      const hue = (baseHue + gridHue[i] + x * 0.5 + y * 0.3 + n * 60) % 360;
+      const sat = 50 + freshness * 40;
+      const lit = 30 + freshness * 45 + n * 15;
+
+      ctx.fillStyle = `hsla(${hue}, ${sat}%, ${lit}%, ${alpha})`;
+      ctx.font = `${CELL - 2}px monospace`;
+      ctx.fillText(char, x * CELL, y * CELL + CELL - 2);
+    }
+  }
+}
+
+function drawFlowField() {
+  // Subtle flow lines
+  ctx.strokeStyle = `rgba(255,255,255,0.02)`;
+  ctx.lineWidth = 0.5;
+
+  const step = 30;
+  for (let x = 0; x < W; x += step) {
+    for (let y = 0; y < H; y += step) {
+      const angle = noise.noise2D(x * 0.003 + time * 0.2, y * 0.003) * Math.PI * 2;
+      const len = 8 + noise2.noise2D(x * 0.005, y * 0.005 + time * 0.1) * 12;
+
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + Math.cos(angle) * len, y + Math.sin(angle) * len);
+      ctx.stroke();
+    }
+  }
+}
+
+function drawEvents() {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    e.time++;
+    if (e.time > e.maxTime) { events.splice(i, 1); continue; }
+
+    const progress = e.time / e.maxTime;
+    const radius = progress * 80;
+    const alpha = (1 - progress) * 0.3;
+
+    ctx.beginPath();
+    ctx.arc(e.x, e.y, radius, 0, Math.PI * 2);
+    const hue = e.type === 'compile' ? 140 :
+                e.type === 'error' ? 0 :
+                e.type === 'mutation' ? 280 : 50;
+    ctx.strokeStyle = `hsla(${hue}, 70%, 60%, ${alpha})`;
+    ctx.lineWidth = 2 * (1 - progress);
+    ctx.stroke();
+
+    // Inner ring
+    if (progress < 0.5) {
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, radius * 0.4, 0, Math.PI * 2);
+      ctx.strokeStyle = `hsla(${hue}, 90%, 80%, ${alpha * 2})`;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  }
+}
+
+function drawParticles() {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    if (!particles[i].update()) {
+      particles.splice(i, 1);
+    } else {
+      particles[i].draw();
+    }
+  }
+}
+
+function drawEntropyWave() {
+  // Bottom wave showing entropy level
+  ctx.beginPath();
+  ctx.moveTo(0, H);
+  for (let x = 0; x <= W; x += 4) {
+    const n = noise.noise2D(x * 0.005 + time * 0.5, time * 0.3);
+    const height = entropy * 40 + n * 20;
+    ctx.lineTo(x, H - height);
+  }
+  ctx.lineTo(W, H);
+  ctx.closePath();
+
+  const grad = ctx.createLinearGradient(0, H - 60, 0, H);
+  const hue = (time * 20) % 360;
+  grad.addColorStop(0, `hsla(${hue}, 60%, 50%, 0)`);
+  grad.addColorStop(1, `hsla(${hue}, 60%, 50%, ${entropy * 0.15})`);
+  ctx.fillStyle = grad;
+  ctx.fill();
+}
+
+// --- Entropy bar ---
+function updateEntropyBar() {
+  const hue = entropy < 0.3 ? 200 : entropy < 0.6 ? 50 : 0;
+  const width = entropy * 100;
+  entropyBar.style.background = `linear-gradient(90deg,
+    hsla(${hue}, 80%, 50%, 0.8) 0%,
+    hsla(${hue + 40}, 80%, 50%, 0.4) ${width}%,
+    transparent ${width}%)`;
+}
+
+// --- Main loop ---
+function frame() {
+  time += 0.016;
+
+  // Trail fade
+  ctx.fillStyle = `rgba(0, 0, 0, ${0.15 + (1 - entropy) * 0.15})`;
+  ctx.fillRect(0, 0, W, H);
+
+  updateEntropy();
+  mutateGrid();
+
+  drawFlowField();
+  drawGrid();
+  drawEvents();
+  drawParticles();
+  drawEntropyWave();
+  updateEntropyBar();
+
+  // Occasional spontaneous events
+  if (Math.random() < 0.01 * entropy) {
+    triggerEvent(
+      Math.random() * W,
+      Math.random() * H,
+      ['compile', 'error', 'mutation', 'shift'][Math.floor(Math.random() * 4)]
+    );
+  }
+
+  // UI update
+  eVal.textContent = entropy.toFixed(3);
+  mVal.textContent = mutations.toLocaleString();
+  gVal.textContent = generation;
+
+  requestAnimationFrame(frame);
+}
+
+// --- Mouse interaction ---
+canvas.addEventListener('mousemove', (e) => {
+  mouseX = e.clientX;
+  mouseY = e.clientY;
+  mouseActive = true;
+});
+
+canvas.addEventListener('mouseleave', () => {
+  mouseActive = false;
+});
+
+canvas.addEventListener('click', (e) => {
+  // Click causes a burst
+  triggerEvent(e.clientX, e.clientY, 'compile');
+  triggerEvent(e.clientX, e.clientY, 'mutation');
+
+  // Mutate nearby cells aggressively
+  const cx = Math.floor(e.clientX / CELL);
+  const cy = Math.floor(e.clientY / CELL);
+  const radius = 8;
+  for (let dy = -radius; dy <= radius; dy++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      const nx = cx + dx, ny = cy + dy;
+      if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) continue;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > radius) continue;
+      const i = ny * cols + nx;
+      const charset = Object.values(CHARSETS)[Math.floor(Math.random() * Object.values(CHARSETS).length)];
+      grid[i] = charset[Math.floor(Math.random() * charset.length)];
+      gridAge[i] = 0;
+      gridVelocity[i] = (Math.random() - 0.5) * 6;
+      gridHue[i] = Math.random() * 360;
+      mutations++;
+    }
+  }
+  generation++;
+});
+
+// Keyboard: space reseeds everything
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space') {
+    e.preventDefault();
+    initGrid();
+    generation++;
+    for (let i = 0; i < 8; i++) {
+      triggerEvent(Math.random() * W, Math.random() * H, 'compile');
+    }
+  }
+});
+
+// Start
+frame();
+</script>
+</body>
+</html>

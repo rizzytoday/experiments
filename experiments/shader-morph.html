@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reaction-Diffusion – Living Chemistry</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; overflow: hidden; cursor: crosshair; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #overlay {
+    position: fixed; bottom: 16px; left: 16px;
+    font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px;
+    color: rgba(255,255,255,0.5); pointer-events: none; z-index: 10;
+    line-height: 1.6;
+  }
+  #overlay span { color: rgba(255,255,255,0.3); }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="overlay">
+  07 – Reaction-Diffusion<br>
+  <span>click: seed life &nbsp; scroll: mutate &nbsp; r: reset &nbsp; space: pause &nbsp; s: screenshot</span>
+</div>
+<script>
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl', { antialias: false, preserveDrawingBuffer: true });
+
+// Float textures for simulation precision
+const floatExt = gl.getExtension('OES_texture_float');
+if (!floatExt) console.warn('OES_texture_float not available – simulation may have banding');
+
+let mouse = [0.5, 0.5], time = 0, paused = false;
+let clicking = false, clickPos = [0.5, 0.5];
+let killRate = 0.0649;
+const feedRate = 0.0367;
+
+// --- Shaders ---
+const vsrc = `attribute vec2 a_pos;
+void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
+
+// Simulation: Gray-Scott reaction-diffusion
+const simFsrc = `precision highp float;
+uniform vec2 u_resolution;
+uniform sampler2D u_prevFrame;
+uniform float u_clicking;
+uniform vec2 u_click;
+uniform float u_feed;
+uniform float u_kill;
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / u_resolution;
+  vec2 px = 1.0 / u_resolution;
+
+  // Current state: R = chemical U, G = chemical V
+  vec2 state = texture2D(u_prevFrame, uv).rg;
+  float U = state.r;
+  float V = state.g;
+
+  // 9-point weighted Laplacian for isotropic diffusion
+  // Weights: center=-1, adjacent=0.2, diagonal=0.05
+  vec2 lapState =
+    texture2D(u_prevFrame, uv + vec2(-px.x, 0.0)).rg * 0.2 +
+    texture2D(u_prevFrame, uv + vec2( px.x, 0.0)).rg * 0.2 +
+    texture2D(u_prevFrame, uv + vec2(0.0,  px.y)).rg * 0.2 +
+    texture2D(u_prevFrame, uv + vec2(0.0, -px.y)).rg * 0.2 +
+    texture2D(u_prevFrame, uv + vec2(-px.x,  px.y)).rg * 0.05 +
+    texture2D(u_prevFrame, uv + vec2( px.x,  px.y)).rg * 0.05 +
+    texture2D(u_prevFrame, uv + vec2(-px.x, -px.y)).rg * 0.05 +
+    texture2D(u_prevFrame, uv + vec2( px.x, -px.y)).rg * 0.05 +
+    state * -1.0;
+
+  float lapU = lapState.r;
+  float lapV = lapState.g;
+
+  // Diffusion rates
+  float dU = 0.2097;
+  float dV = 0.1050;
+
+  // Reaction term: U + 2V -> 3V
+  float UVV = U * V * V;
+
+  // Gray-Scott update
+  float newU = U + dU * lapU - UVV + u_feed * (1.0 - U);
+  float newV = V + dV * lapV + UVV - (u_feed + u_kill) * V;
+
+  // Click/drag seeds V chemical
+  if (u_clicking > 0.5) {
+    float d = length(uv - u_click);
+    float seed = smoothstep(0.02, 0.0, d);
+    newV = max(newV, seed * 0.5);
+    newU = min(newU, 1.0 - seed * 0.5);
+  }
+
+  gl_FragColor = vec4(clamp(newU, 0.0, 1.0), clamp(newV, 0.0, 1.0), 0.0, 1.0);
+}`;
+
+// Display: map chemical concentrations to color
+const displayFsrc = `precision highp float;
+uniform sampler2D u_frame;
+uniform vec2 u_resolution;
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / u_resolution;
+  vec2 state = texture2D(u_frame, uv).rg;
+  float U = state.r;
+  float V = state.g;
+
+  // Color mapping based on V concentration
+  vec3 deep    = vec3(0.01, 0.01, 0.02);
+  vec3 teal    = vec3(0.06, 0.45, 0.42);
+  vec3 cyan    = vec3(0.15, 0.65, 0.55);
+  vec3 hot     = vec3(0.85, 0.4, 0.1);
+  vec3 bright  = vec3(0.75, 0.9, 0.85);
+
+  float body  = smoothstep(0.05, 0.2, V);
+  float mid   = smoothstep(0.15, 0.35, V);
+  float front = smoothstep(0.2, 0.4, V) * (1.0 - smoothstep(0.4, 0.6, V));
+  float peak  = smoothstep(0.45, 0.65, V);
+
+  vec3 col = deep;
+  col = mix(col, teal, body);
+  col = mix(col, cyan, mid * 0.6);
+  col = mix(col, hot, front * 0.5);
+  col = mix(col, bright, peak * 0.4);
+
+  // Subtle purple undertone where U is depleted
+  col += vec3(0.03, 0.01, 0.06) * (1.0 - U) * 0.4;
+
+  // Tone mapping + gamma
+  col = col / (1.0 + col);
+  col = pow(col, vec3(0.4545));
+
+  // Vignette
+  col *= 0.5 + 0.5 * pow(16.0 * uv.x * uv.y * (1.0 - uv.x) * (1.0 - uv.y), 0.2);
+
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+// --- Setup ---
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  initFBOs();
+  initState();
+}
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
+    console.error(gl.getShaderInfoLog(s));
+  return s;
+}
+
+function createProgram(vs, fs) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS))
+    console.error('Program link failed:', gl.getProgramInfoLog(p));
+  return p;
+}
+
+const simProg = createProgram(vsrc, simFsrc);
+const displayProg = createProgram(vsrc, displayFsrc);
+
+// Fullscreen triangle
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+
+// Ping-pong framebuffers
+let fbos = [null, null], textures = [null, null], currentFBO = 0;
+
+function createFBO(w, h) {
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  const type = floatExt ? gl.FLOAT : gl.UNSIGNED_BYTE;
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, type, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  const fbo = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return { fbo, tex };
+}
+
+function initFBOs() {
+  for (let i = 0; i < 2; i++) {
+    if (fbos[i]) { gl.deleteFramebuffer(fbos[i]); gl.deleteTexture(textures[i]); }
+    const r = createFBO(canvas.width, canvas.height);
+    fbos[i] = r.fbo;
+    textures[i] = r.tex;
+  }
+}
+
+function initState() {
+  const w = canvas.width, h = canvas.height;
+  const useFloat = !!floatExt;
+
+  if (useFloat) {
+    const data = new Float32Array(w * h * 4);
+    for (let i = 0; i < w * h; i++) {
+      data[i * 4]     = 1.0; // U = 1
+      data[i * 4 + 1] = 0.0; // V = 0
+      data[i * 4 + 2] = 0.0;
+      data[i * 4 + 3] = 1.0;
+    }
+    // Seed V clusters in a ring around center
+    const cx = w >> 1, cy = h >> 1;
+    const seeds = [[cx, cy]];
+    for (let s = 0; s < 15; s++) {
+      const a = s * Math.PI * 2 / 15;
+      const r = 15 + Math.random() * 50;
+      seeds.push([Math.floor(cx + Math.cos(a) * r), Math.floor(cy + Math.sin(a) * r)]);
+    }
+    for (const [sx, sy] of seeds) {
+      const radius = 3 + Math.floor(Math.random() * 4);
+      for (let dx = -radius; dx <= radius; dx++) {
+        for (let dy = -radius; dy <= radius; dy++) {
+          if (dx * dx + dy * dy > radius * radius) continue;
+          const x = sx + dx, y = sy + dy;
+          if (x < 0 || x >= w || y < 0 || y >= h) continue;
+          const idx = (y * w + x) * 4;
+          data[idx]     = 0.5;  // U reduced
+          data[idx + 1] = 0.25; // V seeded
+        }
+      }
+    }
+    for (let i = 0; i < 2; i++) {
+      gl.bindTexture(gl.TEXTURE_2D, textures[i]);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.FLOAT, data);
+    }
+  } else {
+    const data = new Uint8Array(w * h * 4);
+    for (let i = 0; i < w * h; i++) {
+      data[i * 4]     = 255; // U = 1
+      data[i * 4 + 1] = 0;   // V = 0
+      data[i * 4 + 2] = 0;
+      data[i * 4 + 3] = 255;
+    }
+    const cx = w >> 1, cy = h >> 1;
+    const seeds = [[cx, cy]];
+    for (let s = 0; s < 15; s++) {
+      const a = s * Math.PI * 2 / 15;
+      const r = 15 + Math.random() * 50;
+      seeds.push([Math.floor(cx + Math.cos(a) * r), Math.floor(cy + Math.sin(a) * r)]);
+    }
+    for (const [sx, sy] of seeds) {
+      const radius = 3 + Math.floor(Math.random() * 4);
+      for (let dx = -radius; dx <= radius; dx++) {
+        for (let dy = -radius; dy <= radius; dy++) {
+          if (dx * dx + dy * dy > radius * radius) continue;
+          const x = sx + dx, y = sy + dy;
+          if (x < 0 || x >= w || y < 0 || y >= h) continue;
+          const idx = (y * w + x) * 4;
+          data[idx]     = 128; // U ≈ 0.5
+          data[idx + 1] = 64;  // V ≈ 0.25
+        }
+      }
+    }
+    for (let i = 0; i < 2; i++) {
+      gl.bindTexture(gl.TEXTURE_2D, textures[i]);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    }
+  }
+  currentFBO = 0;
+}
+
+initFBOs();
+initState();
+window.addEventListener('resize', resize);
+
+// --- Events ---
+canvas.addEventListener('mousemove', e => {
+  mouse = [e.clientX / window.innerWidth, 1.0 - e.clientY / window.innerHeight];
+  if (clicking) clickPos = [e.clientX / canvas.width, 1.0 - e.clientY / canvas.height];
+});
+canvas.addEventListener('mousedown', e => {
+  clicking = true;
+  clickPos = [e.clientX / canvas.width, 1.0 - e.clientY / canvas.height];
+});
+canvas.addEventListener('mouseup', () => { clicking = false; });
+canvas.addEventListener('wheel', e => {
+  killRate = Math.max(0.045, Math.min(0.075, killRate + e.deltaY * -0.00003));
+  e.preventDefault();
+}, { passive: false });
+
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space') { paused = !paused; e.preventDefault(); }
+  if (e.code === 'KeyR') { initState(); }
+  if (e.code === 'KeyS') {
+    const link = document.createElement('a');
+    link.download = 'shader-reaction-diffusion.png';
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  }
+  if (e.key >= '1' && e.key <= '8') {
+    const files = ['shader-sdf','shader-noise','shader-warp','shader-feedback','shader-cosmos','shader-audio','shader-morph','shader-physarum'];
+    window.location.href = files[e.key - 1] + '.html';
+  }
+});
+
+// --- Uniform cache ---
+function setupAttrib(prog) {
+  const aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+}
+
+const simU = {
+  prev: gl.getUniformLocation(simProg, 'u_prevFrame'),
+  res:  gl.getUniformLocation(simProg, 'u_resolution'),
+  clk:  gl.getUniformLocation(simProg, 'u_clicking'),
+  cp:   gl.getUniformLocation(simProg, 'u_click'),
+  feed: gl.getUniformLocation(simProg, 'u_feed'),
+  kill: gl.getUniformLocation(simProg, 'u_kill'),
+};
+const dispU = {
+  frame: gl.getUniformLocation(displayProg, 'u_frame'),
+  res:   gl.getUniformLocation(displayProg, 'u_resolution'),
+};
+
+// --- Render ---
+function frame(now) {
+  if (!paused) {
+    time = now * 0.001;
+
+    // 8 simulation iterations per display frame
+    for (let i = 0; i < 8; i++) {
+      const read = currentFBO, write = 1 - currentFBO;
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbos[write]);
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      gl.useProgram(simProg);
+      setupAttrib(simProg);
+
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, textures[read]);
+      gl.uniform1i(simU.prev, 0);
+      gl.uniform2f(simU.res, canvas.width, canvas.height);
+      gl.uniform1f(simU.clk, clicking ? 1.0 : 0.0);
+      gl.uniform2f(simU.cp, clickPos[0], clickPos[1]);
+      gl.uniform1f(simU.feed, feedRate);
+      gl.uniform1f(simU.kill, killRate);
+
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      currentFBO = write;
+    }
+  }
+
+  // Display pass (always runs, even when paused)
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.useProgram(displayProg);
+  setupAttrib(displayProg);
+
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, textures[currentFBO]);
+  gl.uniform1i(dispU.frame, 0);
+  gl.uniform2f(dispU.res, canvas.width, canvas.height);
+
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lissajous Table</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #fff; overflow: hidden; cursor: crosshair; }
+canvas { display: block; }
+.controls {
+  position: fixed; bottom: 16px; right: 16px;
+  background: rgba(255,255,255,0.85); backdrop-filter: blur(20px);
+  border: 1px solid rgba(0,0,0,0.08); border-radius: 14px;
+  padding: 14px 18px; font: 11px/1.6 monospace; color: rgba(0,0,0,0.55);
+  min-width: 200px; z-index: 10;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+}
+.controls label { display: flex; justify-content: space-between; align-items: center; margin: 4px 0; }
+.controls span { min-width: 36px; text-align: right; color: rgba(0,0,0,0.7); }
+input[type=range] {
+  -webkit-appearance: none; width: 100px; height: 3px; background: rgba(0,0,0,0.12);
+  border-radius: 2px; outline: none; margin: 0 8px;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 12px; height: 12px;
+  background: #000; border-radius: 50%; cursor: pointer;
+}
+.hint { color: rgba(0,0,0,0.3); margin-top: 8px; font-size: 10px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="controls">
+  <label>speed <input type="range" id="speed" min="0.1" max="4" step="0.1" value="1"> <span id="speedV">1.0</span></label>
+  <label>trails <input type="range" id="trails" min="40" max="600" step="10" value="280"> <span id="trailsV">280</span></label>
+  <label>grid <input type="range" id="grid" min="3" max="14" step="1" value="8"> <span id="gridV">8</span></label>
+  <div class="hint">hover: focus cell · click: pause · space: reset</div>
+</div>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let N = 8;
+let trailLen = 280;
+let cellW, cellH;
+let trails = [];
+let speed = 1.0;
+let mouseX = -1, mouseY = -1;
+let hoverRow = -1, hoverCol = -1;
+let paused = false;
+let time = 0;
+let lastT = 0;
+
+const speedEl = document.getElementById('speed');
+const trailsEl = document.getElementById('trails');
+const gridEl = document.getElementById('grid');
+
+speedEl.oninput = () => { speed = +speedEl.value; document.getElementById('speedV').textContent = speed.toFixed(1); };
+trailsEl.oninput = () => { trailLen = +trailsEl.value; document.getElementById('trailsV').textContent = trailLen; };
+gridEl.oninput = () => { N = +gridEl.value; document.getElementById('gridV').textContent = N; rebuildTrails(); };
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = window.innerWidth * dpr;
+  canvas.height = window.innerHeight * dpr;
+  canvas.style.width = window.innerWidth + 'px';
+  canvas.style.height = window.innerHeight + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  rebuildTrails();
+}
+
+function rebuildTrails() {
+  cellW = window.innerWidth / (N + 1);
+  cellH = window.innerHeight / (N + 1);
+  trails = [];
+  for (let r = 0; r < N; r++) {
+    trails[r] = [];
+    for (let c = 0; c < N; c++) {
+      trails[r][c] = [];
+    }
+  }
+}
+
+resize();
+window.addEventListener('resize', resize);
+
+canvas.addEventListener('mousemove', (e) => {
+  mouseX = e.clientX; mouseY = e.clientY;
+  const gc = Math.floor(mouseX / cellW) - 1;
+  const gr = Math.floor(mouseY / cellH) - 1;
+  hoverRow = (gr >= 0 && gr < N) ? gr : -1;
+  hoverCol = (gc >= 0 && gc < N) ? gc : -1;
+});
+canvas.addEventListener('mouseleave', () => { mouseX = -1; mouseY = -1; hoverRow = -1; hoverCol = -1; });
+canvas.addEventListener('click', () => { paused = !paused; });
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space') { e.preventDefault(); rebuildTrails(); time = 0; }
+});
+
+function draw(t) {
+  const dt = (t - lastT) * 0.001; lastT = t;
+  if (!paused) time += dt * speed;
+
+  const w = window.innerWidth, h = window.innerHeight;
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';
+  ctx.fillRect(0, 0, w, h);
+
+  const radius = Math.min(cellW, cellH) * 0.38;
+
+  // Grid lines
+  ctx.strokeStyle = 'rgba(0,0,0,0.06)'; ctx.lineWidth = 0.5;
+  for (let i = 0; i <= N + 1; i++) {
+    ctx.beginPath(); ctx.moveTo(i * cellW, 0); ctx.lineTo(i * cellW, h); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, i * cellH); ctx.lineTo(w, i * cellH); ctx.stroke();
+  }
+
+  // Hover highlight
+  if (hoverRow >= 0 && hoverCol >= 0) {
+    ctx.fillStyle = 'rgba(0,0,0,0.025)';
+    ctx.fillRect(cellW, (hoverRow + 1) * cellH, w - cellW, cellH);
+    ctx.fillRect((hoverCol + 1) * cellW, cellH, cellW, h - cellH);
+    ctx.fillStyle = 'rgba(0,0,0,0.035)';
+    ctx.fillRect((hoverCol + 1) * cellW, (hoverRow + 1) * cellH, cellW, cellH);
+  }
+
+  // Header circles – top
+  for (let c = 0; c < N; c++) {
+    const freq = c + 1, cx = (c + 1.5) * cellW, cy = cellH * 0.5, angle = freq * time;
+    ctx.strokeStyle = hoverCol === c ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.15)';
+    ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2); ctx.stroke();
+    const dx = cx + Math.cos(angle) * radius, dy = cy + Math.sin(angle) * radius;
+    ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(dx, dy, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = hoverCol === c ? 'rgba(0,0,0,0.1)' : 'rgba(0,0,0,0.03)';
+    ctx.beginPath(); ctx.moveTo(dx, cellH); ctx.lineTo(dx, h); ctx.stroke();
+    ctx.fillStyle = 'rgba(0,0,0,0.2)'; ctx.font = '10px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(freq, cx, cy + radius + 12);
+  }
+
+  // Header circles – left
+  for (let r = 0; r < N; r++) {
+    const freq = r + 1, cx = cellW * 0.5, cy = (r + 1.5) * cellH, angle = freq * time;
+    ctx.strokeStyle = hoverRow === r ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.15)';
+    ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2); ctx.stroke();
+    const dx = cx + Math.cos(angle) * radius, dy = cy + Math.sin(angle) * radius;
+    ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(dx, dy, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = hoverRow === r ? 'rgba(0,0,0,0.1)' : 'rgba(0,0,0,0.03)';
+    ctx.beginPath(); ctx.moveTo(cellW, dy); ctx.lineTo(w, dy); ctx.stroke();
+    ctx.fillStyle = 'rgba(0,0,0,0.2)'; ctx.font = '10px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(freq, cx, cy + radius + 12);
+  }
+
+  // Curves
+  for (let r = 0; r < N; r++) {
+    for (let c = 0; c < N; c++) {
+      const freqX = c + 1, freqY = r + 1;
+      const cx = (c + 1.5) * cellW, cy = (r + 1.5) * cellH;
+      const px = cx + Math.sin(freqX * time) * radius;
+      const py = cy + Math.sin(freqY * time) * radius;
+
+      if (!trails[r] || !trails[r][c]) continue;
+      const trail = trails[r][c];
+      trail.push({ x: px, y: py });
+      if (trail.length > trailLen) trail.shift();
+
+      const isHovered = (r === hoverRow && c === hoverCol);
+      const isRowOrCol = (r === hoverRow || c === hoverCol);
+      const baseAlpha = isHovered ? 1.0 : isRowOrCol ? 0.5 : (hoverRow >= 0 ? 0.12 : 0.7);
+
+      if (trail.length > 1) {
+        for (let i = 1; i < trail.length; i++) {
+          const a = (i / trail.length) * baseAlpha;
+          ctx.strokeStyle = `rgba(0,0,0,${a})`; ctx.lineWidth = isHovered ? 1.6 : 1.1;
+          ctx.beginPath(); ctx.moveTo(trail[i-1].x, trail[i-1].y); ctx.lineTo(trail[i].x, trail[i].y); ctx.stroke();
+        }
+      }
+      ctx.fillStyle = `rgba(0,0,0,${isHovered ? 1 : isRowOrCol ? 0.6 : (hoverRow >= 0 ? 0.15 : 0.8)})`;
+      ctx.beginPath(); ctx.arc(px, py, isHovered ? 3.5 : 2.5, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  // Ratio label
+  if (hoverRow >= 0 && hoverCol >= 0) {
+    const fx = hoverCol + 1, fy = hoverRow + 1;
+    const gcd = (a, b) => b === 0 ? a : gcd(b, a % b);
+    const g = gcd(fx, fy);
+    ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.font = '13px monospace'; ctx.textAlign = 'left';
+    ctx.fillText(`${fx/g}:${fy/g}`, (hoverCol+1)*cellW+6, (hoverRow+1)*cellH+16);
+  }
+
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>

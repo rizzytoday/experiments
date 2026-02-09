@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wave Interference</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box }
+body { background:#000; overflow:hidden; cursor:crosshair }
+canvas { display:block }
+#controls {
+  position:fixed; bottom:16px; right:16px; z-index:10;
+  backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px);
+  background:rgba(0,10,20,0.75); border:1px solid rgba(77,201,246,0.1);
+  border-radius:14px; padding:14px 16px; min-width:190px;
+  font:11px/1.6 monospace; color:rgba(77,201,246,0.55);
+  box-shadow:0 4px 24px rgba(0,0,0,0.3);
+}
+#controls label { display:flex; justify-content:space-between; align-items:center; margin:5px 0 }
+#controls label span { min-width:42px; text-align:right; color:rgba(77,201,246,0.8) }
+input[type=range] {
+  -webkit-appearance:none; width:100px; height:3px;
+  background:rgba(77,201,246,0.12); border-radius:2px; outline:none;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance:none; width:12px; height:12px; background:#4dc9f6; border-radius:50%; cursor:pointer;
+}
+input[type=range]::-moz-range-thumb {
+  width:12px; height:12px; background:#4dc9f6; border-radius:50%; border:none; cursor:pointer;
+}
+.hint { color:rgba(77,201,246,0.2); margin-top:10px; font-size:10px; line-height:1.5 }
+#readout {
+  position:fixed; bottom:16px; left:16px; font:12px monospace;
+  color:rgba(77,201,246,0.35); z-index:10;
+}
+label[data-cb] { margin-top:6px; cursor:pointer }
+label[data-cb] input { accent-color:#4dc9f6; margin-right:6px }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="controls">
+  <label>λ <input type="range" id="wl" min="10" max="60" value="30"> <span id="wlV">30</span></label>
+  <label>freq <input type="range" id="fr" min="0.5" max="3" step="0.1" value="1.5"> <span id="frV">1.5</span></label>
+  <label>damp <input type="range" id="dm" min="0" max="1" step="0.01" value="0.3"> <span id="dmV">0.30</span></label>
+  <label data-cb><input type="checkbox" id="half">half-res</label>
+  <div class="hint">click add · right-click remove<br>space pause · R reset</div>
+</div>
+<div id="readout"></div>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const readout = document.getElementById('readout');
+const slWL = document.getElementById('wl'), spWL = document.getElementById('wlV');
+const slFR = document.getElementById('fr'), spFR = document.getElementById('frV');
+const slDM = document.getElementById('dm'), spDM = document.getElementById('dmV');
+const cbHalf = document.getElementById('half');
+
+let W, H, img, buf, rw, rh, scale;
+let sources = [];
+let paused = false, t = 0, lastTime = 0, fps = 0, frames = 0, fpsT = 0;
+
+function resize() {
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = W; canvas.height = H;
+  updateRes();
+}
+
+function updateRes() {
+  scale = cbHalf.checked ? 2 : 1;
+  rw = Math.ceil(W / scale); rh = Math.ceil(H / scale);
+  img = ctx.createImageData(rw, rh);
+  buf = new Uint32Array(img.data.buffer);
+}
+
+window.addEventListener('resize', resize);
+cbHalf.addEventListener('change', updateRes);
+
+function addSource(x, y) { if (sources.length < 8) sources.push({ x, y }); }
+function removeNearest(x, y) {
+  if (!sources.length) return;
+  let minD = Infinity, idx = 0;
+  for (let i = 0; i < sources.length; i++) {
+    const dx = sources[i].x - x, dy = sources[i].y - y, d = dx * dx + dy * dy;
+    if (d < minD) { minD = d; idx = i; }
+  }
+  sources.splice(idx, 1);
+}
+
+canvas.addEventListener('click', e => addSource(e.clientX, e.clientY));
+canvas.addEventListener('contextmenu', e => { e.preventDefault(); removeNearest(e.clientX, e.clientY); });
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); paused = !paused; }
+  if (e.code === 'KeyR') sources = [];
+});
+
+slWL.oninput = () => spWL.textContent = slWL.value;
+slFR.oninput = () => spFR.textContent = parseFloat(slFR.value).toFixed(1);
+slDM.oninput = () => spDM.textContent = parseFloat(slDM.value).toFixed(2);
+
+function draw(now) {
+  requestAnimationFrame(draw);
+  frames++;
+  if (now - fpsT >= 1000) { fps = frames; frames = 0; fpsT = now; }
+  if (!paused) t += 0.05 * parseFloat(slFR.value);
+
+  const wl = parseFloat(slWL.value);
+  const damp = parseFloat(slDM.value);
+  const k = (2 * Math.PI) / wl;
+  const ns = sources.length;
+  const sc = scale;
+
+  for (let py = 0; py < rh; py++) {
+    const wy = py * sc;
+    const off = py * rw;
+    for (let px = 0; px < rw; px++) {
+      const wx = px * sc;
+      let amp = 0;
+      for (let s = 0; s < ns; s++) {
+        const dx = wx - sources[s].x, dy = wy - sources[s].y;
+        const dist = Math.sqrt(dx * dx + dy * dy) + 1;
+        const atten = Math.exp(-damp * dist * 0.01) / Math.sqrt(dist);
+        amp += Math.sin(k * dist - t) * atten;
+      }
+      // diverging blue-white-blue palette
+      const v = amp * 0.5;
+      const clamped = Math.max(-1, Math.min(1, v));
+      const abs = Math.abs(clamped);
+      const r = (0.02 + abs * 0.95) * 255 | 0;
+      const g = (0.05 + abs * 0.90) * 255 | 0;
+      const b = (0.15 + abs * 0.85) * 255 | 0;
+      // tint towards white at peaks, deep blue at zero
+      const w = abs * abs;
+      const fr = (r * (1 - w) + 255 * w) | 0;
+      const fg = (g * (1 - w) + 255 * w) | 0;
+      const fb = (b * (1 - w * 0.5) + 246 * w * 0.5) | 0;
+      buf[off + px] = 0xFF000000 | (fb << 16) | (fg << 8) | fr;
+    }
+  }
+
+  if (sc === 1) {
+    ctx.putImageData(img, 0, 0);
+  } else {
+    ctx.imageSmoothingEnabled = true;
+    const tmp = new ImageData(new Uint8ClampedArray(img.data), rw, rh);
+    createImageBitmap(tmp).then(bmp => {
+      ctx.clearRect(0, 0, W, H);
+      ctx.drawImage(bmp, 0, 0, W, H);
+      bmp.close();
+    });
+  }
+
+  // draw source dots
+  ctx.fillStyle = '#4dc9f6';
+  for (let s = 0; s < ns; s++) {
+    ctx.beginPath();
+    ctx.arc(sources[s].x, sources[s].y, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  readout.textContent = `sources: ${ns}/8  fps: ${fps}`;
+}
+
+resize();
+addSource(W * 0.35, H * 0.5);
+addSource(W * 0.65, H * 0.5);
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>

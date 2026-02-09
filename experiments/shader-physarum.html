@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Physarum – Slime Mold Intelligence</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; overflow: hidden; cursor: crosshair; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #overlay {
+    position: fixed; bottom: 16px; left: 16px;
+    font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px;
+    color: rgba(255,255,255,0.5); pointer-events: none; z-index: 10;
+    line-height: 1.6;
+  }
+  #overlay span { color: rgba(255,255,255,0.3); }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="overlay">
+  08 – Physarum<br>
+  <span>mouse: attract &nbsp; click: deposit &nbsp; scroll: sensor angle &nbsp; r: reset &nbsp; space: pause &nbsp; s: screenshot</span>
+</div>
+<script>
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl', { antialias: false, preserveDrawingBuffer: true });
+
+const floatExt = gl.getExtension('OES_texture_float');
+if (!floatExt) { document.body.innerHTML = '<p style="color:#fff;padding:2em">OES_texture_float required</p>'; throw 'no float'; }
+
+let mouse = [0.5, 0.5], time = 0, paused = false;
+let clicking = false, sensorAngle = 0.4;
+
+const AGENT_SIZE = 256; // 256x256 = 65536 agents
+
+// --- Shaders ---
+
+// Simple fullscreen vertex shader
+const quadVS = `attribute vec2 a_pos;
+void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
+
+// === Agent update shader ===
+// Each pixel in agent texture = one agent
+// RG = position (0-1), B = heading (0-1 maps to 0-2pi), A = 1
+const agentFS = `precision highp float;
+uniform vec2 u_agentRes;
+uniform vec2 u_trailRes;
+uniform sampler2D u_agents;
+uniform sampler2D u_trail;
+uniform float u_sensorAngle;
+uniform float u_time;
+uniform vec2 u_mouse;
+uniform float u_clicking;
+
+#define TAU 6.28318530718
+
+float hash(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+
+void main() {
+  vec2 agentUV = gl_FragCoord.xy / u_agentRes;
+  vec4 agent = texture2D(u_agents, agentUV);
+
+  vec2 pos = agent.rg;
+  float heading = agent.b * TAU;
+
+  // Sensor parameters
+  float sAngle = u_sensorAngle;
+  float sDist = 9.0 / max(u_trailRes.x, u_trailRes.y);
+  float moveSpeed = 1.2 / max(u_trailRes.x, u_trailRes.y);
+  float turnSpeed = 0.35;
+
+  // Sense: sample trail at 3 positions
+  vec2 dirC = vec2(cos(heading), sin(heading));
+  vec2 dirL = vec2(cos(heading + sAngle), sin(heading + sAngle));
+  vec2 dirR = vec2(cos(heading - sAngle), sin(heading - sAngle));
+
+  float trailC = texture2D(u_trail, pos + dirC * sDist).r;
+  float trailL = texture2D(u_trail, pos + dirL * sDist).r;
+  float trailR = texture2D(u_trail, pos + dirR * sDist).r;
+
+  // Mouse attraction: add virtual trail near mouse
+  if (u_clicking > 0.5) {
+    float md = length(pos - u_mouse);
+    if (md < 0.15) {
+      vec2 toMouse = normalize(u_mouse - pos);
+      float mouseAngle = atan(toMouse.y, toMouse.x);
+      // Bias toward mouse
+      float attract = (0.15 - md) * 3.0;
+      trailC += attract * max(dot(dirC, toMouse), 0.0);
+      trailL += attract * max(dot(dirL, toMouse), 0.0);
+      trailR += attract * max(dot(dirR, toMouse), 0.0);
+    }
+  }
+
+  // Rotate toward strongest trail
+  float rng = hash(pos * 127.1 + u_time * 0.01);
+
+  if (trailC > trailL && trailC > trailR) {
+    // Go straight (no turn)
+  } else if (trailC < trailL && trailC < trailR) {
+    // Both sides stronger than center – random turn
+    heading += (rng - 0.5) * turnSpeed * 2.0;
+  } else if (trailL > trailR) {
+    heading += turnSpeed;
+  } else {
+    heading -= turnSpeed;
+  }
+
+  // Small random jitter to prevent perfect lattices
+  heading += (rng - 0.5) * 0.05;
+
+  // Move
+  pos += moveSpeed * vec2(cos(heading), sin(heading));
+
+  // Wrap (toroidal)
+  pos = fract(pos);
+
+  // Store heading as 0-1
+  float h01 = fract(heading / TAU);
+
+  gl_FragColor = vec4(pos, h01, 1.0);
+}`;
+
+// === Trail diffuse + decay shader ===
+const trailFS = `precision highp float;
+uniform vec2 u_resolution;
+uniform sampler2D u_trail;
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / u_resolution;
+  vec2 px = 1.0 / u_resolution;
+
+  // 3x3 box blur (diffusion)
+  vec4 sum = vec4(0.0);
+  for (int dy = -1; dy <= 1; dy++) {
+    for (int dx = -1; dx <= 1; dx++) {
+      sum += texture2D(u_trail, uv + vec2(float(dx), float(dy)) * px);
+    }
+  }
+  sum /= 9.0;
+
+  // Decay
+  float decay = 0.955;
+  gl_FragColor = vec4(sum.rgb * decay, 1.0);
+}`;
+
+// === Agent deposit vertex shader ===
+// Each vertex reads its agent's position from the agent texture
+const depositVS = `attribute vec2 a_agentUV;
+uniform sampler2D u_agents;
+uniform vec2 u_trailRes;
+
+void main() {
+  vec4 agent = texture2D(u_agents, a_agentUV);
+  vec2 pos = agent.rg;
+  // Map 0-1 position to clip space -1 to 1
+  gl_Position = vec4(pos * 2.0 - 1.0, 0.0, 1.0);
+  gl_PointSize = 1.0;
+}`;
+
+// === Agent deposit fragment shader ===
+const depositFS = `precision highp float;
+void main() {
+  gl_FragColor = vec4(0.5, 0.5, 0.5, 1.0);
+}`;
+
+// === Display shader ===
+const displayFS = `precision highp float;
+uniform sampler2D u_trail;
+uniform vec2 u_resolution;
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / u_resolution;
+  float t = texture2D(u_trail, uv).r;
+
+  // Color ramp: black -> deep blue/purple -> teal -> bright cyan -> white
+  vec3 col;
+  if (t < 0.1) {
+    col = mix(vec3(0.008, 0.005, 0.015), vec3(0.04, 0.02, 0.08), t * 10.0);
+  } else if (t < 0.3) {
+    float f = (t - 0.1) / 0.2;
+    col = mix(vec3(0.04, 0.02, 0.08), vec3(0.08, 0.35, 0.35), f);
+  } else if (t < 0.6) {
+    float f = (t - 0.3) / 0.3;
+    col = mix(vec3(0.08, 0.35, 0.35), vec3(0.2, 0.7, 0.55), f);
+  } else {
+    float f = (t - 0.6) / 0.4;
+    col = mix(vec3(0.2, 0.7, 0.55), vec3(0.85, 0.95, 0.9), f);
+  }
+
+  // Tone mapping + gamma
+  col = col / (1.0 + col);
+  col = pow(col, vec3(0.4545));
+
+  // Vignette
+  col *= 0.5 + 0.5 * pow(16.0 * uv.x * uv.y * (1.0 - uv.x) * (1.0 - uv.y), 0.2);
+
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+// --- Setup ---
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
+    console.error(gl.getShaderInfoLog(s));
+  return s;
+}
+
+function createProgram(vs, fs) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS))
+    console.error('Program link failed:', gl.getProgramInfoLog(p));
+  return p;
+}
+
+// Programs
+const agentProg   = createProgram(quadVS, agentFS);
+const trailProg   = createProgram(quadVS, trailFS);
+const depositProg = createProgram(depositVS, depositFS);
+const displayProg = createProgram(quadVS, displayFS);
+
+// Fullscreen triangle buffer
+const quadBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+
+// Agent UV buffer (one vertex per agent – used for GL_POINTS deposit)
+const agentUVs = new Float32Array(AGENT_SIZE * AGENT_SIZE * 2);
+for (let y = 0; y < AGENT_SIZE; y++) {
+  for (let x = 0; x < AGENT_SIZE; x++) {
+    const i = (y * AGENT_SIZE + x) * 2;
+    agentUVs[i]     = (x + 0.5) / AGENT_SIZE;
+    agentUVs[i + 1] = (y + 0.5) / AGENT_SIZE;
+  }
+}
+const agentVBO = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, agentVBO);
+gl.bufferData(gl.ARRAY_BUFFER, agentUVs, gl.STATIC_DRAW);
+
+// --- FBOs ---
+// Agent FBOs: FLOAT, AGENT_SIZE x AGENT_SIZE
+let agentFBOs = [null, null], agentTexs = [null, null], curAgent = 0;
+// Trail FBOs: FLOAT, full resolution
+let trailFBOs = [null, null], trailTexs = [null, null], curTrail = 0;
+
+function createFloatFBO(w, h) {
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.FLOAT, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const fbo = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return { fbo, tex };
+}
+
+function initFBOs() {
+  for (let i = 0; i < 2; i++) {
+    if (agentFBOs[i]) { gl.deleteFramebuffer(agentFBOs[i]); gl.deleteTexture(agentTexs[i]); }
+    if (trailFBOs[i]) { gl.deleteFramebuffer(trailFBOs[i]); gl.deleteTexture(trailTexs[i]); }
+    const a = createFloatFBO(AGENT_SIZE, AGENT_SIZE);
+    agentFBOs[i] = a.fbo; agentTexs[i] = a.tex;
+    const t = createFloatFBO(canvas.width, canvas.height);
+    trailFBOs[i] = t.fbo; trailTexs[i] = t.tex;
+  }
+}
+
+function initAgents() {
+  const data = new Float32Array(AGENT_SIZE * AGENT_SIZE * 4);
+  for (let i = 0; i < AGENT_SIZE * AGENT_SIZE; i++) {
+    // Spawn in a ring around center
+    const angle = Math.random() * Math.PI * 2;
+    const radius = 0.1 + Math.random() * 0.25;
+    data[i * 4]     = 0.5 + Math.cos(angle) * radius; // posX
+    data[i * 4 + 1] = 0.5 + Math.sin(angle) * radius; // posY
+    // Heading: point roughly inward (toward center) + some randomness
+    const inward = Math.atan2(0.5 - (0.5 + Math.sin(angle) * radius),
+                              0.5 - (0.5 + Math.cos(angle) * radius));
+    data[i * 4 + 2] = ((inward + (Math.random() - 0.5) * 1.0) / (Math.PI * 2) + 1.0) % 1.0; // heading 0-1
+    data[i * 4 + 3] = 1.0;
+  }
+  for (let i = 0; i < 2; i++) {
+    gl.bindTexture(gl.TEXTURE_2D, agentTexs[i]);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, AGENT_SIZE, AGENT_SIZE, 0, gl.RGBA, gl.FLOAT, data);
+  }
+  // Clear trail
+  const trailData = new Float32Array(canvas.width * canvas.height * 4);
+  for (let i = 0; i < 2; i++) {
+    gl.bindTexture(gl.TEXTURE_2D, trailTexs[i]);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, canvas.width, canvas.height, 0, gl.RGBA, gl.FLOAT, trailData);
+  }
+  curAgent = 0;
+  curTrail = 0;
+}
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  initFBOs();
+  initAgents();
+}
+
+resize();
+window.addEventListener('resize', resize);
+
+// --- Uniform caches ---
+const agentU = {
+  agentRes:    gl.getUniformLocation(agentProg, 'u_agentRes'),
+  trailRes:    gl.getUniformLocation(agentProg, 'u_trailRes'),
+  agents:      gl.getUniformLocation(agentProg, 'u_agents'),
+  trail:       gl.getUniformLocation(agentProg, 'u_trail'),
+  sensorAngle: gl.getUniformLocation(agentProg, 'u_sensorAngle'),
+  time:        gl.getUniformLocation(agentProg, 'u_time'),
+  mouse:       gl.getUniformLocation(agentProg, 'u_mouse'),
+  clicking:    gl.getUniformLocation(agentProg, 'u_clicking'),
+};
+const trailU = {
+  resolution: gl.getUniformLocation(trailProg, 'u_resolution'),
+  trail:      gl.getUniformLocation(trailProg, 'u_trail'),
+};
+const depositU = {
+  agents:   gl.getUniformLocation(depositProg, 'u_agents'),
+  trailRes: gl.getUniformLocation(depositProg, 'u_trailRes'),
+};
+const displayU = {
+  trail:      gl.getUniformLocation(displayProg, 'u_trail'),
+  resolution: gl.getUniformLocation(displayProg, 'u_resolution'),
+};
+
+// --- Events ---
+canvas.addEventListener('mousemove', e => {
+  mouse = [e.clientX / window.innerWidth, 1.0 - e.clientY / window.innerHeight];
+});
+canvas.addEventListener('mousedown', () => { clicking = true; });
+canvas.addEventListener('mouseup', () => { clicking = false; });
+canvas.addEventListener('wheel', e => {
+  sensorAngle = Math.max(0.1, Math.min(1.2, sensorAngle + e.deltaY * -0.002));
+  e.preventDefault();
+}, { passive: false });
+
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space') { paused = !paused; e.preventDefault(); }
+  if (e.code === 'KeyR') { initAgents(); }
+  if (e.code === 'KeyS') {
+    const link = document.createElement('a');
+    link.download = 'shader-physarum.png';
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  }
+  if (e.key >= '1' && e.key <= '8') {
+    const files = ['shader-sdf','shader-noise','shader-warp','shader-feedback','shader-cosmos','shader-audio','shader-morph','shader-physarum'];
+    window.location.href = files[e.key - 1] + '.html';
+  }
+});
+
+// --- Helpers ---
+function bindQuad(prog) {
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+  const aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+}
+
+// --- Render ---
+function frame(now) {
+  if (!paused) {
+    time = now * 0.001;
+
+    // === Pass 1: Agent update ===
+    const readAgent = curAgent, writeAgent = 1 - curAgent;
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, agentFBOs[writeAgent]);
+    gl.viewport(0, 0, AGENT_SIZE, AGENT_SIZE);
+    gl.useProgram(agentProg);
+    bindQuad(agentProg);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, agentTexs[readAgent]);
+    gl.uniform1i(agentU.agents, 0);
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, trailTexs[curTrail]);
+    gl.uniform1i(agentU.trail, 1);
+
+    gl.uniform2f(agentU.agentRes, AGENT_SIZE, AGENT_SIZE);
+    gl.uniform2f(agentU.trailRes, canvas.width, canvas.height);
+    gl.uniform1f(agentU.sensorAngle, sensorAngle);
+    gl.uniform1f(agentU.time, time);
+    gl.uniform2f(agentU.mouse, mouse[0], mouse[1]);
+    gl.uniform1f(agentU.clicking, clicking ? 1.0 : 0.0);
+
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    curAgent = writeAgent;
+
+    // === Pass 2: Trail diffuse + decay ===
+    const readTrail = curTrail, writeTrail = 1 - curTrail;
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, trailFBOs[writeTrail]);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.useProgram(trailProg);
+    bindQuad(trailProg);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, trailTexs[readTrail]);
+    gl.uniform1i(trailU.trail, 0);
+    gl.uniform2f(trailU.resolution, canvas.width, canvas.height);
+
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    // === Pass 3: Agent deposit (GL_POINTS, additive blend into trail write FBO) ===
+    // Still bound to trailFBOs[writeTrail]
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE);
+
+    gl.useProgram(depositProg);
+    gl.bindBuffer(gl.ARRAY_BUFFER, agentVBO);
+    const aAgentUV = gl.getAttribLocation(depositProg, 'a_agentUV');
+    gl.enableVertexAttribArray(aAgentUV);
+    gl.vertexAttribPointer(aAgentUV, 2, gl.FLOAT, false, 0, 0);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, agentTexs[curAgent]);
+    gl.uniform1i(depositU.agents, 0);
+    gl.uniform2f(depositU.trailRes, canvas.width, canvas.height);
+
+    gl.drawArrays(gl.POINTS, 0, AGENT_SIZE * AGENT_SIZE);
+
+    gl.disable(gl.BLEND);
+    curTrail = writeTrail;
+
+    // Mouse click deposits extra trail directly
+    if (clicking) {
+      // Quick: draw a point at mouse position into trail
+      // Already swapped, so we'd need another pass. Instead, handle in agent shader.
+    }
+  }
+
+  // === Pass 4: Display ===
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.useProgram(displayProg);
+  bindQuad(displayProg);
+
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, trailTexs[curTrail]);
+  gl.uniform1i(displayU.trail, 0);
+  gl.uniform2f(displayU.resolution, canvas.width, canvas.height);
+
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Julia Set Explorer</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box }
+body { background:#000; overflow:hidden; cursor:crosshair }
+canvas { width:100vw; height:100vh; display:block }
+#controls {
+  position:fixed; bottom:16px; right:16px; z-index:10;
+  backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px);
+  border:1px solid rgba(102,136,204,0.1); font:11px/1.6 monospace;
+  border-radius:14px; background:rgba(0,5,15,0.75); color:rgba(102,136,204,0.55);
+  box-shadow:0 4px 24px rgba(0,0,0,0.3); padding:14px 18px; min-width:190px;
+}
+.row { display:flex; justify-content:space-between; align-items:center; margin:5px 0 }
+.row span.val { min-width:42px; text-align:right; color:rgba(102,136,204,0.8) }
+input[type=range] {
+  -webkit-appearance:none; width:100px; height:3px;
+  background:rgba(102,136,204,0.12); border-radius:2px; outline:none; margin:0 8px;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance:none; width:12px; height:12px; background:#6688cc; border-radius:50%; cursor:pointer;
+}
+#hint { color:rgba(102,136,204,0.2); margin-top:10px; font-size:10px; line-height:1.5 }
+#readout {
+  position:fixed; bottom:16px; left:16px; font:12px monospace; color:rgba(102,136,204,0.5); z-index:10;
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="controls">
+  <div class="row"><span>iterations</span><input type="range" id="iterSlider" min="50" max="500" step="10" value="200"><span class="val" id="iterVal">200</span></div>
+  <div class="row"><span>palette</span><input type="range" id="palSlider" min="0" max="4" step="1" value="0"><span class="val" id="palVal">0</span></div>
+  <div id="hint">click: set c &nbsp; dbl: auto-orbit<br>scroll: zoom &nbsp; right-drag: pan<br>space: pause &nbsp; S: save &nbsp; R: reset</div>
+</div>
+<div id="readout"></div>
+
+<script>
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl', { antialias:false, preserveDrawingBuffer:true });
+
+const vsrc = `attribute vec2 a_pos; void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
+
+const fsrc = `
+precision highp float;
+uniform vec2 u_resolution;
+uniform vec2 u_c;
+uniform float u_zoom;
+uniform float u_maxIter;
+uniform float u_palette;
+uniform vec2 u_center;
+
+vec3 palette(float t, float idx) {
+  vec3 a, b, c, d;
+  int p = int(idx);
+  if (p == 0)      { a=vec3(0.5,0.5,0.7); b=vec3(0.5,0.5,0.3); c=vec3(1.0,1.0,1.0); d=vec3(0.00,0.10,0.20); }
+  else if (p == 1) { a=vec3(0.5,0.2,0.0); b=vec3(0.5,0.3,0.2); c=vec3(1.0,1.0,1.0); d=vec3(0.00,0.25,0.40); }
+  else if (p == 2) { a=vec3(0.1,0.3,0.6); b=vec3(0.7,0.5,0.3); c=vec3(1.0,1.0,1.5); d=vec3(0.30,0.20,0.20); }
+  else if (p == 3) { a=vec3(0.0,0.3,0.5); b=vec3(0.2,0.4,0.3); c=vec3(2.0,1.0,1.0); d=vec3(0.50,0.20,0.25); }
+  else             { a=vec3(0.5,0.5,0.5); b=vec3(0.5,0.5,0.5); c=vec3(1.0,1.0,1.0); d=vec3(0.00,0.33,0.67); }
+  return a + b * cos(6.28318 * (c * t + d));
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy - 0.5 * u_resolution) / min(u_resolution.x, u_resolution.y);
+  vec2 z = uv * u_zoom + u_center;
+  vec2 c = u_c;
+
+  float iter = 0.0;
+  for (int i = 0; i < 500; i++) {
+    if (float(i) >= u_maxIter) break;
+    if (dot(z, z) > 4.0) break;
+    z = vec2(z.x*z.x - z.y*z.y, 2.0*z.x*z.y) + c;
+    iter += 1.0;
+  }
+
+  if (iter < u_maxIter) {
+    float log_zn = log(dot(z, z)) / 2.0;
+    float nu = log(log_zn / log(2.0)) / log(2.0);
+    iter = iter + 1.0 - nu;
+  }
+
+  float t = iter / u_maxIter;
+  vec3 col = (iter >= u_maxIter) ? vec3(0.0) : palette(t * 5.0, u_palette);
+
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+function compile(src, type) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(s));
+  return s;
+}
+
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(vsrc, gl.VERTEX_SHADER));
+gl.attachShader(prog, compile(fsrc, gl.FRAGMENT_SHADER));
+gl.linkProgram(prog);
+gl.useProgram(prog);
+
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+const aPos = gl.getAttribLocation(prog, 'a_pos');
+gl.enableVertexAttribArray(aPos);
+gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+const loc = {};
+['u_resolution','u_c','u_zoom','u_maxIter','u_palette','u_center'].forEach(n => loc[n] = gl.getUniformLocation(prog, n));
+
+let autoOrbit = true, paused = false, time = 0;
+let cx = 0, cy = 0, zoom = 3.0, centerX = 0, centerY = 0;
+let maxIter = 200, palette = 0;
+let panning = false, panStartX = 0, panStartY = 0, panCX = 0, panCY = 0;
+
+const iterSlider = document.getElementById('iterSlider');
+const palSlider = document.getElementById('palSlider');
+const iterVal = document.getElementById('iterVal');
+const palVal = document.getElementById('palVal');
+const readout = document.getElementById('readout');
+
+iterSlider.addEventListener('input', () => { maxIter = +iterSlider.value; iterVal.textContent = maxIter; });
+palSlider.addEventListener('input', () => { palette = +palSlider.value; palVal.textContent = palette; });
+
+function resize() {
+  canvas.width = window.innerWidth * devicePixelRatio;
+  canvas.height = window.innerHeight * devicePixelRatio;
+  gl.viewport(0, 0, canvas.width, canvas.height);
+}
+window.addEventListener('resize', resize);
+resize();
+
+function mapMouse(e) {
+  const aspect = canvas.width / canvas.height;
+  const mx = (e.clientX / window.innerWidth - 0.5) * 2;
+  const my = -(e.clientY / window.innerHeight - 0.5) * 2;
+  const scale = zoom / Math.min(1, 1 / aspect);
+  return [mx * (aspect > 1 ? zoom * aspect / (canvas.width / canvas.height) : zoom) * 0.5 * (canvas.width / Math.min(canvas.width, canvas.height)) + centerX,
+          my * zoom * 0.5 * (canvas.height / Math.min(canvas.width, canvas.height)) + centerY];
+}
+
+function mapMouseSimple(e) {
+  const w = window.innerWidth, h = window.innerHeight;
+  const mn = Math.min(w, h);
+  const ux = (e.clientX - w * 0.5) / mn;
+  const uy = -(e.clientY - h * 0.5) / mn;
+  return [ux * zoom + centerX, uy * zoom + centerY];
+}
+
+canvas.addEventListener('mousedown', (e) => {
+  if (e.button === 2) {
+    panning = true;
+    panStartX = e.clientX; panStartY = e.clientY;
+    panCX = centerX; panCY = centerY;
+    e.preventDefault();
+  }
+});
+
+canvas.addEventListener('mousemove', (e) => {
+  if (panning) {
+    const w = window.innerWidth, h = window.innerHeight;
+    const mn = Math.min(w, h);
+    const dx = (e.clientX - panStartX) / mn * zoom;
+    const dy = (e.clientY - panStartY) / mn * zoom;
+    centerX = panCX - dx;
+    centerY = panCY + dy;
+  }
+});
+
+canvas.addEventListener('mouseup', (e) => {
+  if (e.button === 2) { panning = false; }
+});
+
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+canvas.addEventListener('click', (e) => {
+  const [mx, my] = mapMouseSimple(e);
+  cx = mx; cy = my;
+  autoOrbit = false;
+});
+
+canvas.addEventListener('dblclick', (e) => {
+  e.preventDefault();
+  autoOrbit = true;
+});
+
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  zoom *= 1 + e.deltaY * 0.001;
+  zoom = Math.max(0.0001, Math.min(4.0, zoom));
+}, { passive: false });
+
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space') { e.preventDefault(); paused = !paused; }
+  if (e.code === 'KeyS') {
+    const link = document.createElement('a');
+    link.download = 'julia-' + Date.now() + '.png';
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  }
+  if (e.code === 'KeyR') { zoom = 3.0; centerX = 0; centerY = 0; }
+});
+
+let lastT = 0;
+function frame(t) {
+  const dt = (t - lastT) * 0.001;
+  lastT = t;
+
+  if (!paused) time += dt;
+
+  if (autoOrbit) {
+    cx = 0.7885 * Math.cos(time * 0.3);
+    cy = 0.7885 * Math.sin(time * 0.3);
+  }
+
+  gl.uniform2f(loc.u_resolution, canvas.width, canvas.height);
+  gl.uniform2f(loc.u_c, cx, cy);
+  gl.uniform1f(loc.u_zoom, zoom);
+  gl.uniform1f(loc.u_maxIter, maxIter);
+  gl.uniform1f(loc.u_palette, palette);
+  gl.uniform2f(loc.u_center, centerX, centerY);
+
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  readout.textContent = `c: ${cx.toFixed(4)}, ${cy.toFixed(4)}  zoom: ${(3.0/zoom).toFixed(1)}x`;
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

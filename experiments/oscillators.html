@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Coupled Oscillators</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #060a10; overflow: hidden; cursor: crosshair; }
+canvas { display: block; }
+.controls {
+  position: fixed; bottom: 16px; right: 16px;
+  background: rgba(10,16,30,0.75); backdrop-filter: blur(20px);
+  border: 1px solid rgba(100,180,255,0.1); border-radius: 14px;
+  padding: 14px 18px; font: 11px/1.6 monospace; color: rgba(140,190,255,0.55);
+  min-width: 220px; z-index: 10;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+}
+.controls label { display: flex; justify-content: space-between; align-items: center; margin: 4px 0; }
+.controls span { min-width: 42px; text-align: right; color: rgba(140,190,255,0.8); }
+input[type=range] {
+  -webkit-appearance: none; width: 90px; height: 3px; background: rgba(100,180,255,0.12);
+  border-radius: 2px; outline: none; margin: 0 8px;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 12px; height: 12px;
+  background: #64b4ff; border-radius: 50%; cursor: pointer;
+}
+.hint { color: rgba(140,190,255,0.22); margin-top: 8px; font-size: 10px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="controls">
+  <label>coupling K <input type="range" id="coupling" min="0" max="8" step="0.1" value="2.8"> <span id="couplingV">2.80</span></label>
+  <label>sim speed <input type="range" id="simspeed" min="1" max="10" step="1" value="3"> <span id="simspeedV">3</span></label>
+  <label>pulse size <input type="range" id="pulse" min="1" max="12" step="1" value="5"> <span id="pulseV">5</span></label>
+  <div class="hint">click/drag: inject pulse · hover: inspect<br>r: reset · space: pause</div>
+</div>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+const gridSize = 48;
+let K = 2.8;
+const dt = 0.05;
+let stepsPerFrame = 3;
+let pulseRadius = 5;
+
+let phases = new Float64Array(gridSize * gridSize);
+let omegas = new Float64Array(gridSize * gridSize);
+let phasesNext = new Float64Array(gridSize * gridSize);
+
+let mouseX = -1, mouseY = -1, mouseDown = false, paused = false;
+
+const couplingEl = document.getElementById('coupling');
+const simspeedEl = document.getElementById('simspeed');
+const pulseEl = document.getElementById('pulse');
+
+couplingEl.oninput = () => { K = +couplingEl.value; document.getElementById('couplingV').textContent = K.toFixed(2); };
+simspeedEl.oninput = () => { stepsPerFrame = +simspeedEl.value; document.getElementById('simspeedV').textContent = stepsPerFrame; };
+pulseEl.oninput = () => { pulseRadius = +pulseEl.value; document.getElementById('pulseV').textContent = pulseRadius; };
+
+function initOscillators() {
+  for (let i = 0; i < gridSize * gridSize; i++) {
+    phases[i] = Math.random() * Math.PI * 2;
+    omegas[i] = 1.0 + (Math.random() + Math.random() + Math.random() - 1.5) * 0.3;
+  }
+}
+initOscillators();
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = window.innerWidth * dpr;
+  canvas.height = window.innerHeight * dpr;
+  canvas.style.width = window.innerWidth + 'px';
+  canvas.style.height = window.innerHeight + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+resize();
+window.addEventListener('resize', resize);
+
+function getGridCoords(ex, ey) {
+  const w = window.innerWidth, h = window.innerHeight;
+  const spacing = Math.min(w, h) / (gridSize + 2);
+  const offsetX = (w - (gridSize - 1) * spacing) / 2;
+  const offsetY = (h - (gridSize - 1) * spacing) / 2;
+  return { row: Math.round((ey - offsetY) / spacing), col: Math.round((ex - offsetX) / spacing) };
+}
+
+function injectPulse(ex, ey) {
+  const { row, col } = getGridCoords(ex, ey);
+  const targetPhase = Math.random() * Math.PI * 2;
+  for (let r = Math.max(0, row - pulseRadius); r <= Math.min(gridSize - 1, row + pulseRadius); r++) {
+    for (let c = Math.max(0, col - pulseRadius); c <= Math.min(gridSize - 1, col + pulseRadius); c++) {
+      const dr = r - row, dc = c - col;
+      if (Math.sqrt(dr * dr + dc * dc) <= pulseRadius) {
+        phases[r * gridSize + c] = targetPhase;
+      }
+    }
+  }
+}
+
+canvas.addEventListener('mousemove', (e) => { mouseX = e.clientX; mouseY = e.clientY; if (mouseDown) injectPulse(e.clientX, e.clientY); });
+canvas.addEventListener('mousedown', (e) => { mouseDown = true; injectPulse(e.clientX, e.clientY); });
+canvas.addEventListener('mouseup', () => { mouseDown = false; });
+canvas.addEventListener('mouseleave', () => { mouseDown = false; mouseX = -1; mouseY = -1; });
+
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space') { e.preventDefault(); paused = !paused; }
+  if (e.key === 'r' || e.key === 'R') initOscillators();
+});
+
+function idx(r, c) { return r * gridSize + c; }
+
+function updatePhases() {
+  for (let r = 0; r < gridSize; r++) {
+    for (let c = 0; c < gridSize; c++) {
+      const i = idx(r, c);
+      let coupling = 0, neighbors = 0;
+      if (r > 0) { coupling += Math.sin(phases[idx(r-1, c)] - phases[i]); neighbors++; }
+      if (r < gridSize-1) { coupling += Math.sin(phases[idx(r+1, c)] - phases[i]); neighbors++; }
+      if (c > 0) { coupling += Math.sin(phases[idx(r, c-1)] - phases[i]); neighbors++; }
+      if (c < gridSize-1) { coupling += Math.sin(phases[idx(r, c+1)] - phases[i]); neighbors++; }
+      phasesNext[i] = phases[i] + (omegas[i] + (K / neighbors) * coupling) * dt;
+    }
+  }
+  const tmp = phases; phases = phasesNext; phasesNext = tmp;
+}
+
+// Color: phase maps to blue/cyan/white cycle
+function phaseColor(phase, boost) {
+  const p = ((phase % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+  const t = p / (Math.PI * 2);
+  // Deep blue → cyan → white → deep blue
+  const r = Math.floor(30 + 80 * Math.pow(Math.sin(t * Math.PI), 2) + boost * 60);
+  const g = Math.floor(60 + 140 * (0.5 + 0.5 * Math.sin(t * Math.PI * 2)) + boost * 40);
+  const b = Math.floor(120 + 135 * (0.5 + 0.5 * Math.cos(t * Math.PI)) + boost * 30);
+  const a = 0.5 + 0.45 * (0.5 + 0.5 * Math.sin(phase)) + boost * 0.3;
+  return `rgba(${Math.min(255,r)},${Math.min(255,g)},${Math.min(255,b)},${Math.min(1,a)})`;
+}
+
+function draw() {
+  const w = window.innerWidth, h = window.innerHeight;
+  ctx.fillStyle = '#060a10';
+  ctx.fillRect(0, 0, w, h);
+
+  if (!paused) {
+    for (let s = 0; s < stepsPerFrame; s++) updatePhases();
+  }
+
+  const spacing = Math.min(w, h) / (gridSize + 2);
+  const offsetX = (w - (gridSize - 1) * spacing) / 2;
+  const offsetY = (h - (gridSize - 1) * spacing) / 2;
+  const needleLen = spacing * 0.42;
+
+  ctx.lineCap = 'round';
+
+  for (let r = 0; r < gridSize; r++) {
+    for (let c = 0; c < gridSize; c++) {
+      const i = idx(r, c);
+      const phase = phases[i];
+      const cx = offsetX + c * spacing;
+      const cy = offsetY + r * spacing;
+      const dx = Math.cos(phase) * needleLen;
+      const dy = Math.sin(phase) * needleLen;
+
+      let proxBoost = 0;
+      if (mouseX >= 0) {
+        const mx = mouseX - cx, my = mouseY - cy;
+        const md = Math.sqrt(mx * mx + my * my);
+        if (md < spacing * 5) proxBoost = (1 - md / (spacing * 5)) * 0.5;
+      }
+
+      ctx.strokeStyle = phaseColor(phase, proxBoost);
+      ctx.lineWidth = 1.4 + proxBoost * 2;
+      ctx.beginPath();
+      ctx.moveTo(cx - dx * 0.3, cy - dy * 0.3);
+      ctx.lineTo(cx + dx, cy + dy);
+      ctx.stroke();
+
+      // Tip dot
+      const tipAlpha = 0.4 + 0.5 * (0.5 + 0.5 * Math.sin(phase)) + proxBoost * 0.4;
+      ctx.fillStyle = phaseColor(phase, proxBoost + 0.15);
+      ctx.beginPath();
+      ctx.arc(cx + dx, cy + dy, 1.3 + proxBoost, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // Pulse preview
+  if (mouseX >= 0 && !mouseDown) {
+    ctx.strokeStyle = 'rgba(100,180,255,0.08)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(mouseX, mouseY, pulseRadius * spacing, 0, Math.PI * 2); ctx.stroke();
+  }
+
+  // Sync readout
+  let sumCos = 0, sumSin = 0;
+  for (let i = 0; i < gridSize * gridSize; i++) { sumCos += Math.cos(phases[i]); sumSin += Math.sin(phases[i]); }
+  const orderParam = Math.sqrt(sumCos * sumCos + sumSin * sumSin) / (gridSize * gridSize);
+
+  ctx.fillStyle = 'rgba(140,190,255,0.25)'; ctx.font = '12px monospace'; ctx.textAlign = 'left';
+  ctx.fillText(`sync = ${(orderParam * 100).toFixed(0)}%`, 16, h - 16);
+
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>

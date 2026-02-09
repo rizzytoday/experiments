@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hilbert Curve</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box }
+body { background:#040f0a; overflow:hidden; cursor:crosshair }
+canvas { display:block }
+#controls {
+  position:fixed; bottom:20px; right:20px; z-index:10;
+  backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px);
+  border:1px solid rgba(84,212,160,0.1); font:11px/1.6 monospace;
+  border-radius:14px; background:rgba(4,15,10,0.75); color:rgba(84,212,160,0.55);
+  box-shadow:0 4px 24px rgba(0,0,0,0.3); padding:14px 18px; min-width:190px;
+}
+.slider-row { display:flex; justify-content:space-between; align-items:center; margin:5px 0 }
+.slider-row span.val { min-width:42px; text-align:right; color:rgba(84,212,160,0.8) }
+input[type=range] {
+  -webkit-appearance:none; width:100px; height:3px;
+  background:rgba(84,212,160,0.12); border-radius:2px; outline:none; margin:0 8px;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance:none; width:12px; height:12px;
+  background:#54d4a0; border-radius:50%; cursor:pointer;
+}
+#hint { color:rgba(84,212,160,0.2); margin-top:10px; font-size:10px; line-height:1.5 }
+#readout {
+  position:fixed; bottom:20px; left:20px; font:12px monospace;
+  color:rgba(84,212,160,0.35); z-index:10;
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="controls">
+  <div class="slider-row">
+    <label>depth</label>
+    <input type="range" id="depthSlider" min="1" max="7" value="4">
+    <span class="val" id="depthVal">4</span>
+  </div>
+  <div class="slider-row">
+    <label>speed</label>
+    <input type="range" id="speedSlider" min="1" max="50" value="10">
+    <span class="val" id="speedVal">10</span>
+  </div>
+  <div id="hint">SPACE pause &middot; R reset</div>
+</div>
+<div id="readout"></div>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const depthSlider = document.getElementById('depthSlider');
+const speedSlider = document.getElementById('speedSlider');
+const depthVal = document.getElementById('depthVal');
+const speedVal = document.getElementById('speedVal');
+const readout = document.getElementById('readout');
+
+let W, H, dpr;
+let depth = 4, speed = 10, paused = false, drawn = 0;
+let points = [], total = 0, n = 0, size = 0, cell = 0, ox = 0, oy = 0;
+
+function resize() {
+  W = window.innerWidth; H = window.innerHeight;
+  dpr = window.devicePixelRatio || 1;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  reset();
+}
+
+function d2xy(n, d) {
+  let x = 0, y = 0, s, rx, ry, t = d;
+  for (s = 1; s < n; s *= 2) {
+    rx = 1 & (t / 2);
+    ry = 1 & (t ^ rx);
+    if (ry === 0) {
+      if (rx === 1) { x = s - 1 - x; y = s - 1 - y; }
+      [x, y] = [y, x];
+    }
+    x += s * rx;
+    y += s * ry;
+    t = Math.floor(t / 4);
+  }
+  return { x, y };
+}
+
+function computePoints() {
+  n = 1 << depth;
+  total = n * n;
+  size = Math.min(W, H) * 0.85;
+  cell = size / n;
+  ox = (W - size) / 2 + cell / 2;
+  oy = (H - size) / 2 + cell / 2;
+  points = [];
+  for (let d = 0; d < total; d++) {
+    const p = d2xy(n, d);
+    points.push({ x: ox + p.x * cell, y: oy + p.y * cell });
+  }
+}
+
+function reset() {
+  drawn = 0;
+  computePoints();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+}
+
+function lineWidth() {
+  return Math.max(1, 7 - depth);
+}
+
+function draw() {
+  if (!paused && drawn < total - 1) {
+    const segs = Math.min(speed, total - 1 - drawn);
+    ctx.lineWidth = lineWidth();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (let i = 0; i < segs; i++) {
+      const idx = drawn;
+      const progress = idx / (total - 1);
+      const hue = progress * 360;
+      ctx.strokeStyle = `hsl(${hue}, 70%, 60%)`;
+      ctx.beginPath();
+      ctx.moveTo(points[idx].x, points[idx].y);
+      ctx.lineTo(points[idx + 1].x, points[idx + 1].y);
+      ctx.stroke();
+      drawn++;
+    }
+  }
+  readout.textContent = `depth ${depth}  |  ${drawn} / ${total - 1} segments`;
+  requestAnimationFrame(draw);
+}
+
+depthSlider.addEventListener('input', () => {
+  depth = parseInt(depthSlider.value);
+  depthVal.textContent = depth;
+  reset();
+});
+
+speedSlider.addEventListener('input', () => {
+  speed = parseInt(speedSlider.value);
+  speedVal.textContent = speed;
+});
+
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Space') { e.preventDefault(); paused = !paused; }
+  if (e.code === 'KeyR') { reset(); }
+});
+
+window.addEventListener('resize', resize);
+resize();
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>

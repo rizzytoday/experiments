@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Strange Attractor</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #08050f; overflow: hidden; cursor: crosshair; }
+canvas { display: block; }
+.controls {
+  position: fixed; bottom: 16px; right: 16px;
+  background: rgba(16,10,30,0.75); backdrop-filter: blur(20px);
+  border: 1px solid rgba(180,100,255,0.1); border-radius: 14px;
+  padding: 14px 18px; font: 11px/1.6 monospace; color: rgba(180,140,255,0.55);
+  min-width: 190px; z-index: 10;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+}
+.controls label { display: flex; justify-content: space-between; align-items: center; margin: 5px 0; }
+.controls span { min-width: 42px; text-align: right; color: rgba(180,140,255,0.8); }
+input[type=range] {
+  -webkit-appearance: none; width: 100px; height: 3px; background: rgba(180,100,255,0.12);
+  border-radius: 2px; outline: none; margin: 0 8px;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 12px; height: 12px;
+  background: #b480ff; border-radius: 50%; cursor: pointer;
+}
+.hint { color: rgba(180,140,255,0.2); margin-top: 10px; font-size: 10px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="controls">
+  <label>explore <input type="range" id="shape" min="0" max="100" step="1" value="0"> <span id="shapeV">0</span></label>
+  <label>speed <input type="range" id="speed" min="0" max="1" step="0.05" value="0.5"> <span id="speedV">0.50</span></label>
+  <label>glow <input type="range" id="glow" min="1" max="10" step="0.5" value="5"> <span id="glowV">5</span></label>
+  <div class="hint">explore: browse fractals<br>click: clear · space: pause</div>
+</div>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let imgWidth, imgHeight, dpr = 1;
+let densityBuf = null, imageData = null;
+let ix = 0.1, iy = 0.1;
+let paused = false, autoTime = 0, lastT = 0;
+
+let shapeIdx = 0;
+let morphSpeed = 0.5;
+let glowLevel = 5; // controls decay + iters combo
+
+const shapeEl = document.getElementById('shape');
+const speedEl = document.getElementById('speed');
+const glowEl = document.getElementById('glow');
+
+shapeEl.oninput = () => { shapeIdx = +shapeEl.value; document.getElementById('shapeV').textContent = shapeIdx; densityBuf.fill(0); };
+speedEl.oninput = () => { morphSpeed = +speedEl.value; document.getElementById('speedV').textContent = morphSpeed.toFixed(2); };
+glowEl.oninput = () => { glowLevel = +glowEl.value; document.getElementById('glowV').textContent = glowLevel.toFixed(1); };
+
+// Curated fractal shapes
+const presets = [
+  { a: -1.4, b: 1.6, c: 1.0, d: 0.7 },
+  { a: -1.7, b: 1.3, c: -0.1, d: -1.2 },
+  { a: 1.5, b: -1.8, c: 1.6, d: 0.9 },
+  { a: -1.8, b: -2.0, c: -0.5, d: -0.9 },
+  { a: 1.1, b: -1.3, c: 1.7, d: 1.9 },
+  { a: -1.2, b: -1.9, c: 1.8, d: -1.6 },
+  { a: 2.0, b: -2.0, c: -1.2, d: -0.4 },
+  { a: -2.1, b: 1.4, c: 1.3, d: -1.0 },
+  { a: 1.7, b: 1.7, c: 0.6, d: 1.2 },
+  { a: -1.5, b: 2.2, c: 0.3, d: -1.5 },
+];
+
+function lerpPresets(t) {
+  const total = presets.length;
+  const scaled = (t / 100) * total;
+  const i0 = Math.floor(scaled) % total;
+  const i1 = (i0 + 1) % total;
+  const frac = scaled - Math.floor(scaled);
+  const p0 = presets[i0], p1 = presets[i1];
+  return {
+    a: p0.a + (p1.a - p0.a) * frac,
+    b: p0.b + (p1.b - p0.b) * frac,
+    c: p0.c + (p1.c - p0.c) * frac,
+    d: p0.d + (p1.d - p0.d) * frac
+  };
+}
+
+function getParams(t) {
+  const base = lerpPresets(shapeIdx);
+  const m = morphSpeed;
+  return {
+    a: base.a + m * 0.5 * Math.sin(t * 0.13),
+    b: base.b + m * 0.4 * Math.sin(t * 0.089),
+    c: base.c + m * 0.6 * Math.sin(t * 0.071),
+    d: base.d + m * 0.5 * Math.sin(t * 0.107)
+  };
+}
+
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  canvas.width = window.innerWidth * dpr;
+  canvas.height = window.innerHeight * dpr;
+  canvas.style.width = window.innerWidth + 'px';
+  canvas.style.height = window.innerHeight + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  imgWidth = Math.floor(window.innerWidth * dpr);
+  imgHeight = Math.floor(window.innerHeight * dpr);
+  densityBuf = new Float32Array(imgWidth * imgHeight);
+  imageData = ctx.createImageData(imgWidth, imgHeight);
+  const d = imageData.data;
+  for (let i = 0; i < d.length; i += 4) { d[i] = 8; d[i+1] = 5; d[i+2] = 15; d[i+3] = 255; }
+}
+resize();
+window.addEventListener('resize', resize);
+
+canvas.addEventListener('click', () => { densityBuf.fill(0); ix = Math.random() * 0.2 - 0.1; iy = Math.random() * 0.2 - 0.1; });
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space') { e.preventDefault(); paused = !paused; }
+});
+
+// Color LUT
+const colorLUT = new Uint8Array(256 * 3);
+for (let i = 0; i < 256; i++) {
+  const v = i / 255;
+  colorLUT[i * 3]     = Math.min(255, Math.floor(8 + 200 * Math.pow(v, 0.6) + 47 * Math.pow(v, 2)));
+  colorLUT[i * 3 + 1] = Math.min(255, Math.floor(5 + 60 * Math.pow(v, 1.2) + 190 * Math.pow(v, 3)));
+  colorLUT[i * 3 + 2] = Math.min(255, Math.floor(15 + 180 * Math.pow(v, 0.5) + 60 * Math.pow(v, 2.5)));
+}
+
+function draw(t) {
+  const frameDt = (t - lastT) * 0.001; lastT = t;
+  if (!paused) autoTime += frameDt;
+
+  const { a, b, c, d } = getParams(autoTime);
+  const w = imgWidth, h = imgHeight;
+
+  // Glow controls both decay and iterations
+  const decayRate = 0.990 + glowLevel * 0.001; // 0.991 to 1.000
+  const itersPerFrame = Math.floor(20000 + glowLevel * 8000); // 20k to 100k
+
+  if (!paused) {
+    for (let i = 0; i < densityBuf.length; i++) densityBuf[i] *= decayRate;
+
+    const scale = Math.min(w, h) * 0.2;
+    const cx = w / 2, cy = h / 2;
+
+    for (let iter = 0; iter < itersPerFrame; iter++) {
+      const nx = Math.sin(a * iy) + c * Math.cos(a * ix);
+      const ny = Math.sin(b * ix) + d * Math.cos(b * iy);
+      ix = nx; iy = ny;
+      const sx = Math.floor(cx + ix * scale);
+      const sy = Math.floor(cy + iy * scale);
+      if (sx >= 0 && sx < w && sy >= 0 && sy < h) {
+        densityBuf[sy * w + sx] = Math.min(densityBuf[sy * w + sx] + 0.06, 1.0);
+      }
+    }
+  }
+
+  const data = imageData.data;
+  for (let i = 0; i < densityBuf.length; i++) {
+    const lutIdx = Math.floor(Math.min(1, densityBuf[i]) * 255) * 3;
+    const pi = i * 4;
+    data[pi] = colorLUT[lutIdx];
+    data[pi + 1] = colorLUT[lutIdx + 1];
+    data[pi + 2] = colorLUT[lutIdx + 2];
+  }
+
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.putImageData(imageData, 0, 0);
+  ctx.restore();
+
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Orbiters</title>
+<style>
+* { margin: 0; padding: 0; }
+body { background: #fff; overflow: hidden; }
+canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+// Grid config
+const spacing = 38;
+const circleRadius = spacing * 0.82;  // large overlap – circles interlock
+const dotRadius = spacing * 0.115;
+const orbitRadius = circleRadius;
+const loopDuration = 2400; // ms per full orbit
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = window.innerWidth * dpr;
+  canvas.height = window.innerHeight * dpr;
+  canvas.style.width = window.innerWidth + 'px';
+  canvas.style.height = window.innerHeight + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+resize();
+window.addEventListener('resize', resize);
+
+function draw(t) {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+
+  ctx.clearRect(0, 0, w, h);
+
+  // Calculate grid bounds (extend past edges)
+  const cols = Math.ceil(w / spacing) + 2;
+  const rows = Math.ceil(h / spacing) + 2;
+  const offsetX = (w - (cols - 1) * spacing) / 2;
+  const offsetY = (h - (rows - 1) * spacing) / 2;
+
+  // Center of grid for phase calculation
+  const centerCol = (cols - 1) / 2;
+  const centerRow = (rows - 1) / 2;
+
+  const progress = (t % loopDuration) / loopDuration;
+  const baseAngle = progress * Math.PI * 2;
+
+  // Draw all circles first
+  ctx.strokeStyle = 'rgba(0,0,0,0.79)';
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const cx = offsetX + col * spacing;
+      const cy = offsetY + row * spacing;
+      ctx.moveTo(cx + circleRadius, cy);
+      ctx.arc(cx, cy, circleRadius, 0, Math.PI * 2);
+    }
+  }
+  ctx.stroke();
+
+  // Draw all dots
+  ctx.fillStyle = '#000';
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const cx = offsetX + col * spacing;
+      const cy = offsetY + row * spacing;
+
+      // Phase offset based on distance from center
+      const dx = col - centerCol;
+      const dy = row - centerRow;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const phase = dist * 0.45;
+
+      const angle = baseAngle + phase;
+      const dotX = cx + Math.cos(angle) * orbitRadius;
+      const dotY = cy + Math.sin(angle) * orbitRadius;
+
+      ctx.beginPath();
+      ctx.arc(dotX, dotY, dotRadius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  requestAnimationFrame(draw);
+}
+
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>

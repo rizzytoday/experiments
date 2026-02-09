@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Audio Reactive – Sound-Driven Geometry</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; overflow: hidden; cursor: crosshair; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #overlay {
+    position: fixed; bottom: 16px; left: 16px;
+    font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px;
+    color: rgba(255,255,255,0.5); pointer-events: none; z-index: 10;
+    line-height: 1.6;
+  }
+  #overlay span { color: rgba(255,255,255,0.3); }
+  #mic-status {
+    position: fixed; top: 16px; right: 16px;
+    font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px;
+    color: rgba(255,255,255,0.4); pointer-events: none; z-index: 10;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="overlay">
+  06 – Audio Reactive<br>
+  <span>mouse: orbit &nbsp; click: toggle mic &nbsp; scroll: sensitivity &nbsp; space: pause &nbsp; s: screenshot</span>
+</div>
+<div id="mic-status">oscillator</div>
+<script>
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl', { antialias: false, preserveDrawingBuffer: true });
+const micStatus = document.getElementById('mic-status');
+
+let mouse = [0.5, 0.5], time = 0, paused = false, sensitivity = 1.0;
+let useMic = false, audioReady = false;
+
+// --- Web Audio ---
+let audioCtx, analyser, fftData, micStream;
+let oscNodes = []; // all oscillator+lfo nodes for clean teardown
+const FFT_SIZE = 256;
+
+function initAudio() {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = FFT_SIZE * 2;
+  analyser.smoothingTimeConstant = 0.8;
+  fftData = new Uint8Array(FFT_SIZE);
+  startOscillator();
+  audioReady = true;
+}
+
+function startOscillator() {
+  stopOscillator(); // clean up any existing nodes first
+
+  // Three oscillators at varied frequencies so bass/mid/treble all have activity
+  const voices = [
+    { freq: 80,   lfoRate: 0.15, lfoDepth: 60,  gain: 0.3 },  // bass
+    { freq: 320,  lfoRate: 0.23, lfoDepth: 100, gain: 0.2 },  // mid
+    { freq: 1200, lfoRate: 0.37, lfoDepth: 300, gain: 0.12 }, // treble
+  ];
+
+  voices.forEach(v => {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    const lfo = audioCtx.createOscillator();
+    const lfoGain = audioCtx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.value = v.freq;
+    gain.gain.value = v.gain;
+
+    lfo.frequency.value = v.lfoRate;
+    lfoGain.gain.value = v.lfoDepth;
+    lfo.connect(lfoGain);
+    lfoGain.connect(osc.frequency);
+
+    osc.connect(gain);
+    gain.connect(analyser);
+    // Don't connect to destination – silent fallback
+
+    lfo.start();
+    osc.start();
+
+    oscNodes.push(osc, lfo);
+  });
+}
+
+function stopOscillator() {
+  oscNodes.forEach(node => {
+    try { node.stop(); } catch(e) {}
+  });
+  oscNodes = [];
+}
+
+async function toggleMic() {
+  if (!audioReady) initAudio();
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+  if (!useMic) {
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const src = audioCtx.createMediaStreamSource(micStream);
+      src.connect(analyser);
+      stopOscillator();
+      useMic = true;
+      micStatus.textContent = 'mic active';
+      micStatus.style.color = 'rgba(100,255,140,0.6)';
+    } catch (e) {
+      micStatus.textContent = 'mic denied – oscillator';
+      micStatus.style.color = 'rgba(255,140,100,0.6)';
+    }
+  } else {
+    if (micStream) micStream.getTracks().forEach(t => t.stop());
+    useMic = false;
+    startOscillator();
+    micStatus.textContent = 'oscillator';
+    micStatus.style.color = 'rgba(255,255,255,0.4)';
+  }
+}
+
+// --- FFT texture ---
+let fftTexture;
+function initFFTTexture() {
+  fftTexture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, fftTexture);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const blank = new Uint8Array(FFT_SIZE);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, FFT_SIZE, 1, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, blank);
+}
+
+function updateFFTTexture() {
+  if (!audioReady || !analyser) return;
+  analyser.getByteFrequencyData(fftData);
+  gl.bindTexture(gl.TEXTURE_2D, fftTexture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, FFT_SIZE, 1, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, fftData);
+}
+
+function getBands() {
+  if (!fftData) return [0, 0, 0];
+  let bass = 0, mid = 0, treble = 0;
+  for (let i = 0; i < 10; i++) bass += fftData[i];
+  for (let i = 10; i < 100; i++) mid += fftData[i];
+  for (let i = 100; i < FFT_SIZE; i++) treble += fftData[i];
+  bass = (bass / 10 / 255) * sensitivity;
+  mid = (mid / 90 / 255) * sensitivity;
+  treble = (treble / (FFT_SIZE - 100) / 255) * sensitivity;
+  return [bass, mid, treble];
+}
+
+// --- Shaders ---
+const vsrc = `attribute vec2 a_pos;
+void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
+
+const fsrc = `precision highp float;
+uniform float u_time;
+uniform vec2 u_resolution;
+uniform vec2 u_mouse;
+uniform float u_bass;
+uniform float u_mid;
+uniform float u_treble;
+uniform sampler2D u_fft;
+
+// Noise
+float hash(float n) { return fract(sin(n) * 43758.5453); }
+float noise(vec3 p) {
+  vec3 i = floor(p);
+  vec3 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float n = i.x + i.y * 157.0 + 113.0 * i.z;
+  return mix(
+    mix(mix(hash(n+0.0), hash(n+1.0), f.x),
+        mix(hash(n+157.0), hash(n+158.0), f.x), f.y),
+    mix(mix(hash(n+113.0), hash(n+114.0), f.x),
+        mix(hash(n+270.0), hash(n+271.0), f.x), f.y), f.z);
+}
+
+float fbm(vec3 p) {
+  float v = 0.0, a = 0.5;
+  for (int i = 0; i < 4; i++) {
+    v += a * noise(p);
+    p = p * 2.0 + vec3(100.0);
+    a *= 0.5;
+  }
+  return v;
+}
+
+mat2 rot(float a) { float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
+
+// SDF sphere with audio displacement
+float map(vec3 p) {
+  // Base sphere with bass-driven scale pulse
+  float baseRadius = 1.0 + u_bass * 0.4;
+
+  // Convert to spherical coords for FFT sampling
+  vec3 np = normalize(p);
+  float angle = atan(np.x, np.z); // -PI to PI
+  float fftU = (angle + 3.14159) / 6.28318; // 0 to 1
+
+  // Sample FFT at this angle for spiky deformation
+  float fftVal = texture2D(u_fft, vec2(fftU, 0.5)).r;
+
+  // Surface noise driven by mids
+  float nDisp = fbm(p * 3.0 + u_time * 0.5) * u_mid * 1.5;
+
+  // Spike height from FFT
+  float spike = fftVal * 0.8 * (u_mid + u_bass * 0.5);
+
+  // Vertical variation too
+  float phi = acos(clamp(np.y, -1.0, 1.0)) / 3.14159;
+  float fftV = texture2D(u_fft, vec2(phi, 0.5)).r;
+  spike = mix(spike, fftV * 0.6, 0.3);
+
+  float d = length(p) - baseRadius - spike - nDisp;
+  return d;
+}
+
+vec3 calcNormal(vec3 p) {
+  vec2 e = vec2(0.002, 0.0);
+  return normalize(vec3(
+    map(p + e.xyy) - map(p - e.xyy),
+    map(p + e.yxy) - map(p - e.yxy),
+    map(p + e.yyx) - map(p - e.yyx)
+  ));
+}
+
+float calcAO(vec3 p, vec3 n) {
+  float occ = 0.0, sca = 1.0;
+  for (int i = 0; i < 5; i++) {
+    float h = 0.01 + 0.12 * float(i);
+    occ += (h - map(p + h * n)) * sca;
+    sca *= 0.95;
+  }
+  return clamp(1.0 - 3.0 * occ, 0.0, 1.0);
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy - 0.5 * u_resolution) / u_resolution.y;
+  vec2 q = gl_FragCoord.xy / u_resolution;
+
+  // Camera orbit from mouse
+  float angleX = (u_mouse.x - 0.5) * 6.28;
+  float angleY = (u_mouse.y - 0.5) * 1.5 + 0.3;
+  float dist = 4.5;
+
+  vec3 ro = vec3(
+    dist * sin(angleX) * cos(angleY),
+    dist * sin(angleY) + 0.5,
+    dist * cos(angleX) * cos(angleY)
+  );
+  vec3 ta = vec3(0.0);
+
+  vec3 ww = normalize(ta - ro);
+  vec3 uu = normalize(cross(ww, vec3(0.0, 1.0, 0.0)));
+  vec3 vv = cross(uu, ww);
+  vec3 rd = normalize(uv.x * uu + uv.y * vv + 1.8 * ww);
+
+  // Background: concentric rings pulsing with bass
+  float bgDist = length(uv);
+  float rings = sin(bgDist * 20.0 - u_time * 3.0 - u_bass * 10.0) * 0.5 + 0.5;
+  rings *= smoothstep(2.0, 0.3, bgDist);
+  float bassRing = rings * u_bass * 0.3;
+
+  // Dominant frequency drives hue
+  float domFreq = u_bass * 0.3 + u_mid * 0.5 + u_treble * 0.2;
+  float hue = domFreq * 2.0 + u_time * 0.1;
+  vec3 bgCol1 = vec3(0.02, 0.01, 0.04);
+  vec3 bgCol2 = vec3(
+    0.1 + 0.08 * sin(hue),
+    0.05 + 0.05 * sin(hue + 2.094),
+    0.12 + 0.1 * sin(hue + 4.189)
+  );
+  vec3 col = mix(bgCol1, bgCol2, bassRing);
+
+  // Raymarch
+  float t = 0.0, d;
+  for (int i = 0; i < 96; i++) {
+    d = map(ro + rd * t);
+    if (d < 0.002 || t > 20.0) break;
+    t += d * 0.7;
+  }
+
+  if (t < 20.0) {
+    vec3 p = ro + rd * t;
+    vec3 n = calcNormal(p);
+
+    // Lighting
+    vec3 lightDir = normalize(vec3(0.8, 0.6, -0.5));
+    float diff = clamp(dot(n, lightDir), 0.0, 1.0);
+    float amb = 0.5 + 0.5 * n.y;
+    float fre = pow(1.0 - clamp(dot(n, -rd), 0.0, 1.0), 3.0);
+    float ao = calcAO(p, n);
+
+    // Hue-shift color based on dominant frequency
+    vec3 mate = vec3(0.15);
+    mate += 0.3 * vec3(
+      0.5 + 0.5 * sin(hue * 3.0 + p.x * 2.0),
+      0.5 + 0.5 * sin(hue * 3.0 + p.y * 2.0 + 2.094),
+      0.5 + 0.5 * sin(hue * 3.0 + p.z * 2.0 + 4.189)
+    );
+
+    col = vec3(0.0);
+    col += mate * diff * vec3(1.0, 0.9, 0.85) * 1.5;
+    col += mate * amb * ao * vec3(0.1, 0.12, 0.25) * 0.8;
+    col += fre * vec3(0.3, 0.5, 0.8) * 0.5 * ao;
+
+    // Treble-driven edge glow
+    float edge = 1.0 - clamp(dot(n, -rd), 0.0, 1.0);
+    float glowIntensity = 0.3 + u_treble * 1.5;
+    vec3 glowColor = vec3(
+      0.3 + 0.3 * sin(hue * 2.0),
+      0.2 + 0.3 * sin(hue * 2.0 + 2.094),
+      0.5 + 0.3 * sin(hue * 2.0 + 4.189)
+    );
+    col += edge * edge * edge * glowColor * glowIntensity;
+  }
+
+  // Fog
+  col = mix(col, vec3(0.02, 0.01, 0.04), 1.0 - exp(-0.04 * t * t));
+
+  // Tone mapping + gamma
+  col = col / (1.0 + col);
+  col = pow(col, vec3(0.4545));
+
+  // Vignette
+  col *= 0.5 + 0.5 * pow(16.0 * q.x * q.y * (1.0 - q.x) * (1.0 - q.y), 0.15);
+
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+// --- Setup ---
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  gl.viewport(0, 0, canvas.width, canvas.height);
+}
+resize();
+window.addEventListener('resize', resize);
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
+    console.error(gl.getShaderInfoLog(s));
+  return s;
+}
+
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(gl.VERTEX_SHADER, vsrc));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fsrc));
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
+  console.error('Program link failed:', gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
+
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+const aPos = gl.getAttribLocation(prog, 'a_pos');
+gl.enableVertexAttribArray(aPos);
+gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+const uTime = gl.getUniformLocation(prog, 'u_time');
+const uRes = gl.getUniformLocation(prog, 'u_resolution');
+const uMouse = gl.getUniformLocation(prog, 'u_mouse');
+const uBass = gl.getUniformLocation(prog, 'u_bass');
+const uMid = gl.getUniformLocation(prog, 'u_mid');
+const uTreble = gl.getUniformLocation(prog, 'u_treble');
+const uFFT = gl.getUniformLocation(prog, 'u_fft');
+
+initFFTTexture();
+gl.activeTexture(gl.TEXTURE0);
+gl.bindTexture(gl.TEXTURE_2D, fftTexture);
+gl.uniform1i(uFFT, 0);
+
+// --- Events ---
+canvas.addEventListener('mousemove', e => {
+  mouse = [e.clientX / window.innerWidth, 1.0 - e.clientY / window.innerHeight];
+});
+canvas.addEventListener('click', () => {
+  if (!audioReady) initAudio();
+  toggleMic();
+});
+canvas.addEventListener('wheel', e => {
+  sensitivity = Math.max(0.2, Math.min(4.0, sensitivity + e.deltaY * -0.002));
+  e.preventDefault();
+}, { passive: false });
+
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space') { paused = !paused; e.preventDefault(); }
+  if (e.code === 'KeyS') {
+    const link = document.createElement('a');
+    link.download = 'shader-audio.png';
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  }
+  if (e.key >= '1' && e.key <= '8') {
+    const files = ['shader-sdf','shader-noise','shader-warp','shader-feedback','shader-cosmos','shader-audio','shader-morph','shader-physarum'];
+    window.location.href = files[e.key - 1] + '.html';
+  }
+});
+
+// --- Render ---
+function frame(now) {
+  if (!paused) time = now * 0.001;
+
+  updateFFTTexture();
+  const [bass, mid, treble] = getBands();
+
+  gl.uniform1f(uTime, time);
+  gl.uniform2f(uRes, canvas.width, canvas.height);
+  gl.uniform2f(uMouse, mouse[0], mouse[1]);
+  gl.uniform1f(uBass, bass);
+  gl.uniform1f(uMid, mid);
+  gl.uniform1f(uTreble, treble);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

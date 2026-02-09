@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The Eye</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #0a0a0a;
+      overflow: hidden;
+      cursor: none;
+    }
+
+    .custom-cursor {
+      position: fixed;
+      width: 8px;
+      height: 8px;
+      background: rgba(255, 255, 255, 0.6);
+      border-radius: 50%;
+      pointer-events: none;
+      z-index: 1000;
+      transform: translate(-50%, -50%);
+      transition: transform 0.1s ease, opacity 0.2s ease;
+    }
+
+    .custom-cursor.hidden {
+      opacity: 0;
+    }
+
+    .eye-container {
+      position: relative;
+      width: 300px;
+      height: 180px;
+    }
+
+    .eye-socket {
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse at center,
+        #1a1412 0%,
+        #0d0a09 60%,
+        #050404 100%);
+      border-radius: 50%;
+      box-shadow:
+        inset 0 0 60px rgba(0, 0, 0, 0.8),
+        0 0 80px rgba(0, 0, 0, 0.6);
+    }
+
+    .eye {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 260px;
+      height: 150px;
+      background: radial-gradient(ellipse at 40% 40%,
+        #fff 0%,
+        #f5f5f0 30%,
+        #e8e4dc 60%,
+        #d4cfc4 100%);
+      border-radius: 50%;
+      overflow: hidden;
+      box-shadow:
+        inset 0 0 30px rgba(0, 0, 0, 0.15),
+        inset 0 -10px 30px rgba(0, 0, 0, 0.1);
+    }
+
+    /* Veins */
+    .veins {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      transition: opacity 2s ease;
+    }
+
+    .veins.bloodshot {
+      opacity: 1;
+    }
+
+    .vein {
+      position: absolute;
+      background: linear-gradient(90deg, transparent, #c41e1e, transparent);
+      height: 1px;
+      transform-origin: left center;
+    }
+
+    .vein-1 { top: 30%; left: 5%; width: 35%; transform: rotate(15deg); }
+    .vein-2 { top: 25%; left: 8%; width: 28%; transform: rotate(-8deg); }
+    .vein-3 { top: 40%; left: 3%; width: 32%; transform: rotate(5deg); }
+    .vein-4 { top: 65%; left: 5%; width: 30%; transform: rotate(-12deg); }
+    .vein-5 { top: 70%; left: 8%; width: 25%; transform: rotate(8deg); }
+    .vein-6 { top: 35%; right: 5%; left: auto; width: 30%; transform: rotate(-10deg) scaleX(-1); }
+    .vein-7 { top: 28%; right: 10%; left: auto; width: 22%; transform: rotate(12deg) scaleX(-1); }
+    .vein-8 { top: 60%; right: 5%; left: auto; width: 28%; transform: rotate(6deg) scaleX(-1); }
+    .vein-9 { top: 72%; right: 8%; left: auto; width: 24%; transform: rotate(-15deg) scaleX(-1); }
+
+    .vein::after {
+      content: '';
+      position: absolute;
+      right: 0;
+      top: -1px;
+      width: 40%;
+      height: 1px;
+      background: linear-gradient(90deg, #c41e1e, transparent);
+      transform: rotate(25deg);
+      transform-origin: left center;
+    }
+
+    /* Iris */
+    .iris-container {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      transition: transform 0.08s ease-out;
+    }
+
+    .iris {
+      width: 90px;
+      height: 90px;
+      border-radius: 50%;
+      background:
+        radial-gradient(circle at 50% 50%,
+          #1a1a1a 0%,
+          #1a1a1a 28%,
+          transparent 28%),
+        radial-gradient(circle at 50% 50%,
+          #2d5a4a 0%,
+          #1e4035 40%,
+          #3d7a62 60%,
+          #2d5a4a 80%,
+          #1a3328 100%);
+      box-shadow:
+        inset 0 0 25px rgba(0, 0, 0, 0.6),
+        0 2px 10px rgba(0, 0, 0, 0.3);
+      position: relative;
+      transition: transform 0.3s ease;
+    }
+
+    .iris.dilated {
+      transform: scale(1.15);
+    }
+
+    .iris.constricted {
+      transform: scale(0.85);
+    }
+
+    /* Iris texture */
+    .iris::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      background: repeating-conic-gradient(
+        from 0deg,
+        transparent 0deg 3deg,
+        rgba(0, 0, 0, 0.15) 3deg 6deg
+      );
+    }
+
+    /* Pupil */
+    .pupil {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 28px;
+      height: 28px;
+      background: radial-gradient(circle at 40% 40%,
+        #1a1a1a 0%,
+        #000 100%);
+      border-radius: 50%;
+      transition: width 0.4s ease, height 0.4s ease;
+    }
+
+    .iris.dilated .pupil {
+      width: 45px;
+      height: 45px;
+    }
+
+    .iris.constricted .pupil {
+      width: 18px;
+      height: 18px;
+    }
+
+    /* Light reflection */
+    .reflection {
+      position: absolute;
+      top: 18%;
+      left: 25%;
+      width: 18px;
+      height: 18px;
+      background: radial-gradient(circle at 50% 50%,
+        rgba(255, 255, 255, 0.95) 0%,
+        rgba(255, 255, 255, 0.6) 40%,
+        transparent 70%);
+      border-radius: 50%;
+    }
+
+    .reflection-small {
+      position: absolute;
+      top: 55%;
+      left: 60%;
+      width: 8px;
+      height: 8px;
+      background: radial-gradient(circle,
+        rgba(255, 255, 255, 0.7) 0%,
+        transparent 70%);
+      border-radius: 50%;
+    }
+
+    /* Eyelids */
+    .eyelid {
+      position: absolute;
+      left: -5%;
+      width: 110%;
+      height: 60%;
+      background: linear-gradient(180deg,
+        #1a1412 0%,
+        #0d0a09 100%);
+      transition: transform 0.15s ease;
+      z-index: 10;
+    }
+
+    .eyelid-top {
+      top: -55%;
+      border-radius: 0 0 50% 50%;
+      box-shadow: 0 5px 20px rgba(0, 0, 0, 0.5);
+    }
+
+    .eyelid-bottom {
+      bottom: -55%;
+      border-radius: 50% 50% 0 0;
+      box-shadow: 0 -5px 20px rgba(0, 0, 0, 0.3);
+    }
+
+    /* Eyelashes */
+    .lashes {
+      position: absolute;
+      bottom: -5px;
+      left: 10%;
+      width: 80%;
+      height: 15px;
+      display: flex;
+      justify-content: space-around;
+      align-items: flex-end;
+    }
+
+    .lash {
+      width: 2px;
+      height: 8px;
+      background: linear-gradient(180deg, #1a1412, #2a2420);
+      border-radius: 1px;
+      transform-origin: top center;
+    }
+
+    .lash:nth-child(odd) { height: 12px; transform: rotate(-5deg); }
+    .lash:nth-child(even) { height: 9px; transform: rotate(5deg); }
+    .lash:nth-child(3n) { height: 14px; transform: rotate(0deg); }
+
+    /* Blink animation */
+    .eye-container.blink .eyelid-top {
+      transform: translateY(95%);
+    }
+
+    .eye-container.blink .eyelid-bottom {
+      transform: translateY(-40%);
+    }
+
+    /* Ambient shadow */
+    .eye::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      box-shadow: inset 0 30px 40px -20px rgba(0, 0, 0, 0.4);
+      pointer-events: none;
+    }
+
+    .status {
+      position: fixed;
+      bottom: 40px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255, 255, 255, 0.2);
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    .status.watching {
+      color: rgba(255, 100, 100, 0.4);
+    }
+  </style>
+</head>
+<body>
+  <div class="custom-cursor" id="cursor"></div>
+
+  <div class="eye-container" id="eyeContainer">
+    <div class="eye-socket"></div>
+    <div class="eye">
+      <div class="veins" id="veins">
+        <div class="vein vein-1"></div>
+        <div class="vein vein-2"></div>
+        <div class="vein vein-3"></div>
+        <div class="vein vein-4"></div>
+        <div class="vein vein-5"></div>
+        <div class="vein vein-6"></div>
+        <div class="vein vein-7"></div>
+        <div class="vein vein-8"></div>
+        <div class="vein vein-9"></div>
+      </div>
+
+      <div class="iris-container" id="irisContainer">
+        <div class="iris" id="iris">
+          <div class="pupil"></div>
+          <div class="reflection"></div>
+          <div class="reflection-small"></div>
+        </div>
+      </div>
+
+      <div class="eyelid eyelid-top">
+        <div class="lashes">
+          <div class="lash"></div>
+          <div class="lash"></div>
+          <div class="lash"></div>
+          <div class="lash"></div>
+          <div class="lash"></div>
+          <div class="lash"></div>
+          <div class="lash"></div>
+          <div class="lash"></div>
+          <div class="lash"></div>
+          <div class="lash"></div>
+          <div class="lash"></div>
+          <div class="lash"></div>
+        </div>
+      </div>
+      <div class="eyelid eyelid-bottom"></div>
+    </div>
+  </div>
+
+  <div class="status" id="status">watching</div>
+
+  <script>
+    const eyeContainer = document.getElementById('eyeContainer');
+    const irisContainer = document.getElementById('irisContainer');
+    const iris = document.getElementById('iris');
+    const veins = document.getElementById('veins');
+    const cursor = document.getElementById('cursor');
+    const status = document.getElementById('status');
+
+    let stareTime = 0;
+    let lastMoveTime = Date.now();
+    let isBloodshot = false;
+    let blinkTimeout;
+
+    // Custom cursor
+    document.addEventListener('mousemove', (e) => {
+      cursor.style.left = e.clientX + 'px';
+      cursor.style.top = e.clientY + 'px';
+
+      // Eye tracking
+      const rect = eyeContainer.getBoundingClientRect();
+      const eyeCenterX = rect.left + rect.width / 2;
+      const eyeCenterY = rect.top + rect.height / 2;
+
+      const angle = Math.atan2(e.clientY - eyeCenterY, e.clientX - eyeCenterX);
+      const distance = Math.min(
+        Math.hypot(e.clientX - eyeCenterX, e.clientY - eyeCenterY) / 15,
+        25
+      );
+
+      const moveX = Math.cos(angle) * distance;
+      const moveY = Math.sin(angle) * distance * 0.6; // Less vertical movement
+
+      irisContainer.style.transform = `translate(calc(-50% + ${moveX}px), calc(-50% + ${moveY}px))`;
+
+      // Reset stare timer on movement
+      lastMoveTime = Date.now();
+
+      // Pupil reacts to distance
+      const distanceFromEye = Math.hypot(e.clientX - eyeCenterX, e.clientY - eyeCenterY);
+      if (distanceFromEye < 150) {
+        iris.classList.add('constricted');
+        iris.classList.remove('dilated');
+        status.textContent = 'too close';
+        status.classList.add('watching');
+      } else if (distanceFromEye > 400) {
+        iris.classList.add('dilated');
+        iris.classList.remove('constricted');
+        status.textContent = 'searching';
+        status.classList.remove('watching');
+      } else {
+        iris.classList.remove('dilated', 'constricted');
+        status.textContent = 'watching';
+        status.classList.remove('watching');
+      }
+    });
+
+    document.addEventListener('mouseleave', () => {
+      cursor.classList.add('hidden');
+      iris.classList.add('dilated');
+      status.textContent = 'where did you go';
+    });
+
+    document.addEventListener('mouseenter', () => {
+      cursor.classList.remove('hidden');
+      iris.classList.remove('dilated');
+    });
+
+    // Random blinking
+    function blink() {
+      eyeContainer.classList.add('blink');
+      setTimeout(() => {
+        eyeContainer.classList.remove('blink');
+      }, 150);
+
+      // Random next blink
+      const nextBlink = 2000 + Math.random() * 4000;
+      blinkTimeout = setTimeout(blink, nextBlink);
+    }
+
+    // Start blinking
+    blinkTimeout = setTimeout(blink, 2000);
+
+    // Blink on click
+    document.addEventListener('click', () => {
+      clearTimeout(blinkTimeout);
+      blink();
+    });
+
+    // Stare detection - bloodshot eyes
+    setInterval(() => {
+      const timeSinceMove = Date.now() - lastMoveTime;
+
+      if (timeSinceMove > 5000) {
+        stareTime += 100;
+
+        if (stareTime > 3000 && !isBloodshot) {
+          veins.classList.add('bloodshot');
+          isBloodshot = true;
+          status.textContent = 'stop staring';
+          status.classList.add('watching');
+        }
+      } else {
+        stareTime = Math.max(0, stareTime - 200);
+
+        if (stareTime < 1000 && isBloodshot) {
+          veins.classList.remove('bloodshot');
+          isBloodshot = false;
+        }
+      }
+    }, 100);
+
+    // Occasional random pupil dilation
+    setInterval(() => {
+      if (Math.random() > 0.85) {
+        const currentState = iris.classList.contains('dilated');
+        if (!currentState && !iris.classList.contains('constricted')) {
+          iris.classList.add('dilated');
+          setTimeout(() => iris.classList.remove('dilated'), 800);
+        }
+      }
+    }, 3000);
+  </script>
+</body>
+</html>

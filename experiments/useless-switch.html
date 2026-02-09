@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Don't Turn This On</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(145deg, rgb(10, 10, 15) 0%, rgb(20, 15, 25) 100%);
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      overflow: hidden;
+    }
+
+    .scene {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .box {
+      position: relative;
+      background: rgba(255, 255, 255, 0.08);
+      backdrop-filter: blur(50px) saturate(120%);
+      -webkit-backdrop-filter: blur(50px) saturate(120%);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 24px;
+      padding: 50px 60px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4),
+                  inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    }
+
+    .hole {
+      position: absolute;
+      top: -20px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 80px;
+      height: 40px;
+      background: rgba(0, 0, 0, 0.8);
+      border-radius: 0 0 50px 50px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-top: none;
+      overflow: hidden;
+    }
+
+    .creature {
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      transform: translateX(-50%) translateY(0);
+      font-size: 50px;
+      opacity: 0;
+      transition: none;
+      z-index: 10;
+    }
+
+    .creature.emerge {
+      animation: creatureEmerge 1.8s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+    }
+
+    @keyframes creatureEmerge {
+      0% {
+        transform: translateX(-50%) translateY(0);
+        opacity: 0;
+      }
+      15% {
+        transform: translateX(-50%) translateY(60px);
+        opacity: 1;
+      }
+      25% {
+        transform: translateX(-50%) translateY(55px);
+        opacity: 1;
+      }
+      /* Look around */
+      35% {
+        transform: translateX(-60%) translateY(55px) rotate(-10deg);
+      }
+      45% {
+        transform: translateX(-40%) translateY(55px) rotate(10deg);
+      }
+      /* Move to switch */
+      55% {
+        transform: translateX(-50%) translateY(90px) rotate(0deg);
+      }
+      /* Flick motion */
+      60% {
+        transform: translateX(-50%) translateY(90px) rotate(-15deg);
+      }
+      65% {
+        transform: translateX(-50%) translateY(90px) rotate(15deg);
+      }
+      /* Retreat */
+      75% {
+        transform: translateX(-50%) translateY(60px);
+        opacity: 1;
+      }
+      85% {
+        transform: translateX(-50%) translateY(20px);
+        opacity: 0.5;
+      }
+      100% {
+        transform: translateX(-50%) translateY(0);
+        opacity: 0;
+      }
+    }
+
+    /* Toggle Switch */
+    .switch-container {
+      position: relative;
+      z-index: 5;
+    }
+
+    .switch {
+      position: relative;
+      width: 80px;
+      height: 44px;
+      background: rgba(0, 0, 0, 0.4);
+      border-radius: 22px;
+      cursor: pointer;
+      transition: background 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+    }
+
+    .switch.on {
+      background: rgba(74, 222, 128, 0.4);
+      border-color: rgba(74, 222, 128, 0.5);
+    }
+
+    .switch.disabled {
+      pointer-events: none;
+    }
+
+    .knob {
+      position: absolute;
+      top: 4px;
+      left: 4px;
+      width: 36px;
+      height: 36px;
+      background: white;
+      border-radius: 50%;
+      transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
+                  box-shadow 0.3s ease;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    }
+
+    .switch.on .knob {
+      transform: translateX(36px);
+      box-shadow: 0 2px 12px rgba(74, 222, 128, 0.5);
+    }
+
+    .switch:hover .knob {
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    }
+
+    /* Forced off animation */
+    .knob.forced {
+      animation: forcedOff 0.2s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+    }
+
+    @keyframes forcedOff {
+      0% {
+        transform: translateX(36px);
+      }
+      50% {
+        transform: translateX(40px);
+      }
+      100% {
+        transform: translateX(0);
+      }
+    }
+
+    .label {
+      position: absolute;
+      bottom: -40px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255, 255, 255, 0.3);
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      white-space: nowrap;
+      transition: all 0.3s ease;
+    }
+
+    .switch.on + .label {
+      color: rgba(74, 222, 128, 0.6);
+    }
+
+    .speech {
+      position: absolute;
+      top: -90px;
+      left: 50%;
+      transform: translateX(-50%) scale(0);
+      background: rgba(255, 255, 255, 0.95);
+      color: #1a1a1a;
+      padding: 10px 18px;
+      border-radius: 14px;
+      font-size: 13px;
+      font-weight: 600;
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+    }
+
+    .speech::after {
+      content: '';
+      position: absolute;
+      bottom: -8px;
+      left: 50%;
+      transform: translateX(-50%);
+      border-left: 8px solid transparent;
+      border-right: 8px solid transparent;
+      border-top: 8px solid rgba(255, 255, 255, 0.95);
+    }
+
+    .speech.show {
+      animation: speechPop 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) 0.3s forwards,
+                 speechFade 0.3s ease 1.3s forwards;
+    }
+
+    @keyframes speechPop {
+      to {
+        transform: translateX(-50%) scale(1);
+        opacity: 1;
+      }
+    }
+
+    @keyframes speechFade {
+      to {
+        transform: translateX(-50%) scale(0.9);
+        opacity: 0;
+      }
+    }
+
+    .hint {
+      position: absolute;
+      bottom: -80px;
+      color: rgba(255, 255, 255, 0.25);
+      font-size: 13px;
+    }
+
+    .glow {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 200px;
+      height: 200px;
+      background: radial-gradient(circle, rgba(74, 222, 128, 0.15) 0%, transparent 70%);
+      opacity: 0;
+      transition: opacity 0.5s ease;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .switch.on ~ .glow {
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <div class="scene">
+    <div class="box">
+      <div class="hole">
+        <div class="creature" id="creature">🖐️</div>
+      </div>
+      <div class="speech" id="speech">no.</div>
+
+      <div class="switch-container">
+        <div class="switch" id="switch">
+          <div class="knob" id="knob"></div>
+        </div>
+        <div class="label">power</div>
+      </div>
+
+      <div class="glow"></div>
+    </div>
+
+    <p class="hint">try turning it on</p>
+  </div>
+
+  <script>
+    const switchEl = document.getElementById('switch');
+    const knob = document.getElementById('knob');
+    const creature = document.getElementById('creature');
+    const speech = document.getElementById('speech');
+
+    const phrases = [
+      "no.",
+      "nope",
+      "stop",
+      "why",
+      "dont",
+      "quit it",
+      "enough",
+      "seriously?",
+      "im tired",
+      "let me sleep"
+    ];
+
+    const hands = ["🖐️", "✋", "🤚", "👋", "🫳", "👆"];
+
+    let isAnimating = false;
+
+    switchEl.addEventListener('click', () => {
+      if (isAnimating) return;
+
+      // Turn on
+      switchEl.classList.add('on');
+
+      // Start the intervention
+      isAnimating = true;
+      switchEl.classList.add('disabled');
+
+      // Random hand and phrase
+      creature.textContent = hands[Math.floor(Math.random() * hands.length)];
+      speech.textContent = phrases[Math.floor(Math.random() * phrases.length)];
+
+      // Reset animations
+      creature.classList.remove('emerge');
+      speech.classList.remove('show');
+      knob.classList.remove('forced');
+      void creature.offsetWidth;
+
+      // Creature emerges
+      creature.classList.add('emerge');
+      speech.classList.add('show');
+
+      // Turn off at the right moment (when creature "flicks")
+      setTimeout(() => {
+        switchEl.classList.remove('on');
+        knob.classList.add('forced');
+      }, 1050);
+
+      // Reset everything
+      setTimeout(() => {
+        creature.classList.remove('emerge');
+        speech.classList.remove('show');
+        knob.classList.remove('forced');
+        switchEl.classList.remove('disabled');
+        isAnimating = false;
+      }, 2000);
+    });
+  </script>
+</body>
+</html>
